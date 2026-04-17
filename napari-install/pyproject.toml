@@ -1,9 +1,12 @@
 [project]
 name = "napari-install"
 version = "0.1.0"
-description = "Add your description here"
+description = "Napari on Windows via uv with one-click install and launch"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "==3.11.*"
 dependencies = [
     "napari[all]>=0.7.0",
 ]
+
+[tool.uv]
+package = false
