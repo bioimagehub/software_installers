@@ -114,6 +114,8 @@ If a real icon is found, wire it into both the Start Menu and Desktop shortcuts.
 
 ## Python and uv Rules
 - Keep `project.requires-python` and `.python-version` aligned.
+- Default to Python `3.10` for new installers unless a project explicitly requires another version.
+- If a different Python version is required, state the reason in that app's `README.md`.
 - Prefer app-local environments created by uv.
 - Do not assume global Python installs.
 - Keep each app self-contained in its own folder.

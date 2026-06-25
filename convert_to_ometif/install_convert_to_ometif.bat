@@ -2,8 +2,35 @@
 setlocal
 cd /d "%~dp0"
 
-uv sync
-if errorlevel 1 exit /b %errorlevel%
+set "UV_HTTP_TIMEOUT=120"
+set "SYNC_OK="
+
+echo Resolving environment with uv...
+for /L %%I in (1,1,3) do (
+	echo Attempt %%I of 3: uv sync
+	uv sync
+	if not errorlevel 1 (
+		set "SYNC_OK=1"
+		goto :sync_done
+	)
+	echo uv sync failed on attempt %%I.
+	if %%I LSS 3 (
+		echo Waiting 5 seconds before retry...
+		timeout /t 5 /nobreak >nul
+	)
+)
+
+if not defined SYNC_OK (
+	where python >nul 2>&1
+	if not errorlevel 1 (
+		echo Falling back to system Python: uv sync --python-preference system
+		uv sync --python-preference system
+		if not errorlevel 1 set "SYNC_OK=1"
+	)
+)
+
+:sync_done
+if not defined SYNC_OK exit /b 1
 
 for /f "delims=" %%V in ('uv run python .\convert_to_tif.py --version 2^>nul') do set "APP_VERSION=%%V"
 if not defined APP_VERSION set "APP_VERSION=convert-to-ometif 0.1.0"

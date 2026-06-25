@@ -7,7 +7,7 @@ name = "convert-to-ometif"
 version = "0.1.0"
 description = "Convert microscopy image files to OME-TIFF, TIFF, NPY, or Ilastik H5 from CLI or GUI"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "==3.10.*"
 dependencies =[
     "numpy>=2.1",
     "scipy",

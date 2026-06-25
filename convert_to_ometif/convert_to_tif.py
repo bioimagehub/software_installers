@@ -1067,7 +1067,12 @@ run:
         help="Save each T, C, Z slice as individual file in a folder (maximum compatibility)"
     )
     
-    parser.add_argument(
+    merging_group = parser.add_argument_group(
+        "Merging",
+        "Options for STED scene filtering and scene-to-channel merging"
+    )
+
+    merging_group.add_argument(
         "--scene-filter",
         type=str,
         default="all",
@@ -1081,7 +1086,7 @@ run:
         ),
     )
 
-    parser.add_argument(
+    merging_group.add_argument(
         "--scene-filter-strings",
         type=str,
         nargs="+",
@@ -1093,7 +1098,7 @@ run:
         ),
     )
 
-    parser.add_argument(
+    merging_group.add_argument(
         "--scene-merge-channel",
         action="store_true",
         help=(
@@ -1102,7 +1107,7 @@ run:
         ),
     )
 
-    parser.add_argument(
+    merging_group.add_argument(
         "--channels",
         type=str,
         default=None,
@@ -1170,7 +1175,7 @@ def run_main(argv: Optional[list[str]] = None, use_gooey: bool = False) -> None:
     required_cols=1,
     optional_cols=2,
     navigation="TABBED",
-    tabbed_groups=False,
+    tabbed_groups=True,
     clear_before_run=True,
     monospace_display=True,
 )
