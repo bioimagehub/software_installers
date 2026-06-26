@@ -11,9 +11,10 @@ import logging
 import re
 import json
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
-from typing import Optional
+from typing import Any, Iterator, Optional, cast
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 from tqdm import tqdm
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_NAME = "convert-to-ometif"
 FALLBACK_VERSION = "0.1.0"
+GUI_STATE_FILENAME = "last_run_state.json"
 COMMON_IMAGE_EXTENSIONS = [
     ".nd2",
     ".czi",
@@ -54,6 +56,61 @@ COMMON_IMAGE_EXTENSIONS = [
 ]
 
 
+@contextmanager
+def _mute_console_logging() -> Iterator[None]:
+    """Temporarily suppress console stream logging without affecting file handlers."""
+    root_logger = logging.getLogger()
+    muted_handlers: list[tuple[logging.Handler, int]] = []
+
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.StreamHandler):
+            stream = getattr(handler, "stream", None)
+            if stream in (sys.stdout, sys.stderr):
+                muted_handlers.append((handler, handler.level))
+                handler.setLevel(logging.CRITICAL + 1)
+
+    try:
+        yield
+    finally:
+        for handler, original_level in muted_handlers:
+            handler.setLevel(original_level)
+
+
+def _configure_logging(log_level: str) -> None:
+    """Configure console logging and optional debug file logging."""
+    level = getattr(logging, log_level.upper())
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    # Avoid duplicate handlers across repeated runs in the same process.
+    for existing in list(root_logger.handlers):
+        root_logger.removeHandler(existing)
+
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    if level <= logging.DEBUG:
+        log_file = os.path.abspath("convert_to_ometif.debug.log")
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+        logger.debug("Debug file logging enabled: %s", log_file)
+
+
+def _silence_worker_console_logging() -> None:
+    """Initializer for ProcessPool workers to prevent console log noise."""
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+    root_logger.addHandler(logging.NullHandler())
+    root_logger.setLevel(logging.CRITICAL + 1)
+
+
 def _passthrough_decorator(*_args, **_kwargs):
     def decorator(func):
         return func
@@ -61,7 +118,7 @@ def _passthrough_decorator(*_args, **_kwargs):
     return decorator
 
 
-GOOEY_DECORATOR = Gooey if HAS_GOOEY else _passthrough_decorator
+GOOEY_DECORATOR = cast(Any, Gooey) if HAS_GOOEY and Gooey is not None else _passthrough_decorator
 
 
 def get_application_version() -> str:
@@ -98,7 +155,9 @@ def parse_extension_filters(extensions: Optional[str]) -> Optional[list[str]]:
             normalized.append(suffix)
             seen.add(suffix)
 
-    return normalized or None
+    parsed = normalized or None
+    logger.debug("Parsed extension filters: %s", parsed if parsed is not None else "all")
+    return parsed
 
 
 def matches_extension_filters(file_path: str, extension_filters: Optional[list[str]]) -> bool:
@@ -132,22 +191,126 @@ def parse_selected_files(input_files: Optional[str]) -> list[str]:
                 resolved.append(file_path)
                 seen.add(key)
 
+    logger.debug("Resolved %d explicit input file(s)", len(resolved))
     return resolved
+
+
+def get_gui_state_path() -> Path:
+    """Return the per-user path used to remember the last GUI selections."""
+    base_dir = os.environ.get("APPDATA")
+    if base_dir:
+        state_dir = Path(base_dir) / "BIPHUB" / PROJECT_NAME
+    else:
+        state_dir = Path.home() / f".{PROJECT_NAME}"
+    return state_dir / GUI_STATE_FILENAME
+
+
+def load_gui_state() -> dict[str, object]:
+    """Load remembered GUI selections if available."""
+    state_path = get_gui_state_path()
+    try:
+        with state_path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+        if isinstance(state, dict):
+            logger.debug("Loaded GUI state from %s", state_path)
+            return state
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.debug("Ignoring unreadable GUI state at %s: %s", state_path, exc)
+    return {}
+
+
+def save_gui_state(state: dict[str, object]) -> None:
+    """Persist the latest GUI selections for the next launch."""
+    state_path = get_gui_state_path()
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        with state_path.open("w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+    except Exception as exc:
+        logger.debug("Unable to save GUI state to %s: %s", state_path, exc)
+
+
+def build_gui_defaults() -> dict[str, object]:
+    """Return parser defaults combined with any remembered GUI selections."""
+    state = load_gui_state()
+    defaults: dict[str, object] = {
+        "input_files": state.get("input_files", None),
+        "input_folder": state.get("input_folder", ""),
+        "recursive": state.get("recursive", False),
+        "extensions": state.get("extensions", ",".join(COMMON_IMAGE_EXTENSIONS)),
+        "output_folder": state.get("output_folder", None),
+        "projection_method": state.get("projection_method", None),
+        "collapse_delimiter": state.get("collapse_delimiter", "__"),
+        "no_parallel": state.get("no_parallel", False),
+        "maxcores": state.get("maxcores", None),
+        "no_metadata": state.get("no_metadata", False),
+        "output_suffix": state.get("output_suffix", ""),
+        "output_format": state.get("output_format", "tif"),
+        "dry_run": state.get("dry_run", False),
+        "split": state.get("split", False),
+        "scene_filter": state.get("scene_filter", "all"),
+        "scene_filter_strings": state.get("scene_filter_strings", None),
+        "scene_merge_channel": state.get("scene_merge_channel", False),
+        "channels": state.get("channels", None),
+        "log_level": state.get("log_level", "WARNING"),
+        "input_dims_order": state.get("input_dims_order", None),
+    }
+    if defaults.get("input_files"):
+        defaults["input_folder"] = ""
+    return defaults
+
+
+def remember_run_state(args: argparse.Namespace, selected_channels: Optional[list[int]], explicit_files: Optional[list[str]]) -> None:
+    """Capture the most useful fields from the current run for the next GUI launch."""
+    state: dict[str, object] = {
+        "input_files": ";".join(explicit_files) if explicit_files else None,
+        "input_folder": "" if explicit_files else (args.input_folder or ""),
+        "recursive": bool(args.recursive),
+        "extensions": args.extensions,
+        "output_folder": args.output_folder,
+        "projection_method": args.projection_method,
+        "collapse_delimiter": args.collapse_delimiter,
+        "no_parallel": bool(args.no_parallel),
+        "maxcores": args.maxcores,
+        "no_metadata": bool(args.no_metadata),
+        "output_suffix": args.output_suffix,
+        "output_format": args.output_format,
+        "dry_run": bool(args.dry_run),
+        "split": bool(args.split),
+        "scene_filter": args.scene_filter,
+        "scene_filter_strings": args.scene_filter_strings,
+        "scene_merge_channel": bool(args.scene_merge_channel),
+        "channels": args.channels,
+        "log_level": args.log_level,
+        "input_dims_order": args.input_dims_order,
+    }
+    if selected_channels is not None:
+        state["channels"] = ",".join(str(channel) for channel in selected_channels)
+    save_gui_state(state)
 
 
 def resolve_input_sources(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
-) -> tuple[Optional[list[str]], Optional[str], Optional[list[str]]]:
-    """Resolve input as explicit files or as a folder pattern with extension filters."""
+) -> tuple[Optional[list[str]], Optional[str], bool, Optional[list[str]]]:
+    """Resolve input as explicit files or as a folder with extension filters."""
     raw_input_files = (args.input_files or "").strip()
     raw_input_folder = (args.input_folder or "").strip()
     selected_files = parse_selected_files(args.input_files)
+    logger.debug(
+        "Resolving input sources: input_files=%r input_folder=%r recursive=%s",
+        raw_input_files,
+        raw_input_folder,
+        args.recursive,
+    )
 
     if selected_files:
         if raw_input_folder:
             parser.error("Use either --input-files or --input-folder, not both.")
-        return selected_files, None, None
+        logger.debug("Using explicit file mode")
+        return selected_files, None, False, None
 
     if raw_input_files:
         parser.error("No valid files were found in --input-files. Clear it to use folder fallback.")
@@ -157,8 +320,14 @@ def resolve_input_sources(
     if not os.path.isdir(resolved_folder):
         parser.error(f"Input folder not found: {resolved_folder}")
 
-    pattern = os.path.join(resolved_folder, "**", "*") if args.recursive else os.path.join(resolved_folder, "*")
-    return None, pattern, parse_extension_filters(args.extensions)
+    extension_filters = parse_extension_filters(args.extensions)
+    logger.debug(
+        "Using folder mode: folder=%s recursive=%s extensions=%s",
+        resolved_folder,
+        args.recursive,
+        extension_filters if extension_filters is not None else "all",
+    )
+    return None, resolved_folder, args.recursive, extension_filters
 
 
 
@@ -750,6 +919,8 @@ def convert_single_file(
 
 def process_files(
     input_pattern: Optional[str] = None,
+    input_folder: Optional[str] = None,
+    recursive: bool = False,
     explicit_files: Optional[list[str]] = None,
     output_folder: Optional[str] = None,
     output_format: str = "tif",
@@ -766,12 +937,15 @@ def process_files(
     scene_merge_channel: bool = False,
     channels: Optional[list[int]] = None,
     extension_filters: Optional[list[str]] = None,
+    use_gooey: bool = False,
 ) -> None:
     """
-    Process multiple files matching a pattern.
+    Process files from explicit selection or from an input folder.
 
     Args:
-        input_pattern: File search pattern (supports ** for recursive)
+        input_pattern: Legacy file search pattern (deprecated; kept for compatibility)
+        input_folder: Folder to scan for files when explicit_files is not provided.
+        recursive: Whether to scan input_folder recursively.
         explicit_files: Optional explicit file list to process directly
         output_folder: Output directory (default: input_dir + '_tif')
         projection_method: Optional Z-projection method
@@ -789,68 +963,80 @@ def process_files(
             each group into channel dimension.
         channels: Optional zero-based channel indices to keep.
     """
-    # Find files
     if explicit_files:
+        logger.debug("Processing explicit files mode")
         files = [os.path.abspath(file_path) for file_path in explicit_files if os.path.isfile(file_path)]
     else:
-        if not input_pattern:
-            logger.error("No input files selected and no input pattern provided")
+        logger.debug("Processing folder mode")
+        resolved_folder = input_folder
+        if not resolved_folder and input_pattern:
+            if '**' in input_pattern:
+                resolved_folder = input_pattern.split('**', 1)[0].rstrip('/\\')
+            else:
+                resolved_folder = str(Path(input_pattern).parent)
+
+        if not resolved_folder:
+            logger.error("No input files selected and no input folder provided")
             return
-        search_subfolders = '**' in input_pattern
-        files = rp.get_files_to_process2(input_pattern, search_subfolders=search_subfolders)
-        files = [file_path for file_path in files if os.path.isfile(file_path)]
+
+        resolved_folder = os.path.abspath(resolved_folder)
+        if not os.path.isdir(resolved_folder):
+            logger.error("Input folder not found: %s", resolved_folder)
+            return
+
+        files = []
+        if recursive:
+            logger.debug("Scanning recursively under %s", resolved_folder)
+            for dirpath, _, filenames in os.walk(resolved_folder):
+                for filename in filenames:
+                    files.append(os.path.join(dirpath, filename))
+        else:
+            logger.debug("Scanning top-level folder %s", resolved_folder)
+            with os.scandir(resolved_folder) as entries:
+                for entry in entries:
+                    if entry.is_file():
+                        files.append(entry.path)
 
     if extension_filters:
-        files = [
-            file_path for file_path in files
-            if matches_extension_filters(file_path, extension_filters)
-        ]
-    
+        before = len(files)
+        files = [file_path for file_path in files if matches_extension_filters(file_path, extension_filters)]
+        logger.debug("Extension filter reduced file list: %d -> %d", before, len(files))
+
     if not files:
         suffix_text = f" with extensions {', '.join(extension_filters)}" if extension_filters else ""
         if explicit_files:
-            logger.error(f"No valid input files were selected{suffix_text}")
+            logger.error("No valid input files were selected%s", suffix_text)
         else:
-            logger.error(f"No files found matching pattern: {input_pattern}{suffix_text}")
+            mode = "recursively" if recursive else "in folder"
+            source_folder = input_folder or "(unknown)"
+            logger.error("No files found %s: %s%s", mode, source_folder, suffix_text)
         return
-    
-    logger.info(f"Found {len(files)} file(s) to process")
-    
-    # Determine base folder
+
+    logger.info("Found %d file(s) to process", len(files))
+
     if explicit_files:
         base_folder = os.path.commonpath(files)
         if not os.path.isdir(base_folder):
             base_folder = str(Path(files[0]).parent)
     else:
-        if input_pattern and '**' in input_pattern:
-            base_folder = input_pattern.split('**')[0].rstrip('/\\')
-            if not base_folder:
-                base_folder = os.getcwd()
-            base_folder = os.path.abspath(base_folder)
-        else:
-            base_folder = str(Path(files[0]).parent)
-    
-    # Determine output folder
+        base_folder = os.path.abspath(input_folder) if input_folder else str(Path(files[0]).parent)
+
     if output_folder is None:
         output_folder = base_folder + "_tif"
-    
-    logger.info(f"Output folder: {output_folder}")
-    
-    # Prepare file pairs
+    logger.info("Output folder: %s", output_folder)
+
     if split and rp.normalize_output_format(output_format) != "tif":
         raise ValueError("--split only supports --output-format tif")
 
     output_ext = rp.output_extension_for_format(output_format, tiff_extension=".ome.tif")
-    file_pairs = []
+    file_pairs: list[tuple[str, str]] = []
     for src in files:
         collapsed = rp.collapse_filename(src, base_folder, collapse_delimiter)
-        out_name = os.path.basename(
-            rp.resolve_output_path(collapsed, extension=output_ext, suffix=output_extension)
-        )
+        out_name = os.path.basename(rp.resolve_output_path(collapsed, extension=output_ext, suffix=output_extension))
         out_path = os.path.join(output_folder, out_name)
         file_pairs.append((src, out_path))
-    
-    # Dry run - just print plans
+    logger.debug("Prepared %d file pair(s)", len(file_pairs))
+
     if dry_run:
         print(f"[DRY RUN] Would process {len(file_pairs)} files")
         print(f"[DRY RUN] Output folder: {output_folder}")
@@ -863,43 +1049,97 @@ def process_files(
             print(f"[DRY RUN] {src} -> {dst}")
         return
 
-    # Process files
     if no_parallel or len(file_pairs) == 1:
-        # Sequential processing
+        logger.debug("Sequential processing selected")
+        total = len(file_pairs)
+        done = 0
         for src, dst in file_pairs:
             success = convert_single_file(
-                src, dst, output_format, projection_method, save_metadata, split,
-                scene_filter, scene_filter_strings, scene_merge_channel, channels,
+                src,
+                dst,
+                output_format,
+                projection_method,
+                save_metadata,
+                split,
+                scene_filter,
+                scene_filter_strings,
+                scene_merge_channel,
+                channels,
             )
             if not success:
-                logger.error(f"Failed: {src}")
-    else:
-        # Parallel processing
-        max_workers = rp.resolve_maxcores(maxcores, len(file_pairs))
-        logger.info(f"Processing with {max_workers} workers")
+                logger.error("Failed: %s", src)
+            done += 1
+            if use_gooey:
+                logger.info("Progress: %d/%d", done, total)
+        return
 
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    convert_single_file, src, dst, output_format, projection_method, save_metadata,
-                    split, scene_filter, scene_filter_strings,
-                    scene_merge_channel, channels,
-                ): (src, dst)
-                for src, dst in file_pairs
-            }
-            
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing files", unit="file"):
+    max_workers = rp.resolve_maxcores(maxcores, len(file_pairs))
+    logger.info("Processing with %d workers", max_workers)
+    logger.debug("Starting parallel processing for %d file(s)", len(file_pairs))
+
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=_silence_worker_console_logging) as executor:
+        futures = {
+            executor.submit(
+                convert_single_file,
+                src,
+                dst,
+                output_format,
+                projection_method,
+                save_metadata,
+                split,
+                scene_filter,
+                scene_filter_strings,
+                scene_merge_channel,
+                channels,
+            ): (src, dst)
+            for src, dst in file_pairs
+        }
+
+        failed_sources: list[str] = []
+        future_exceptions: list[tuple[str, str]] = []
+        total = len(futures)
+        done = 0
+
+        if use_gooey:
+            for future in as_completed(futures):
                 src, dst = futures[future]
                 try:
                     success = future.result()
                     if not success:
-                        logger.error(f"Failed: {src}")
-                except Exception as e:
-                    logger.error(f"Exception processing {src}: {e}")
+                        failed_sources.append(src)
+                        logger.error("Failed: %s", src)
+                    else:
+                        logger.debug("Completed: %s -> %s", src, dst)
+                except Exception as exc:
+                    future_exceptions.append((src, str(exc)))
+                    logger.error("Exception processing %s: %s", src, exc)
+                finally:
+                    done += 1
+                    logger.info("Progress: %d/%d", done, total)
+        else:
+            with _mute_console_logging():
+                for future in tqdm(as_completed(futures), total=total, desc="Processing files", unit="file"):
+                    src, dst = futures[future]
+                    try:
+                        success = future.result()
+                        if not success:
+                            failed_sources.append(src)
+                            logger.error("Failed: %s", src)
+                        else:
+                            logger.debug("Completed: %s -> %s", src, dst)
+                    except Exception as exc:
+                        future_exceptions.append((src, str(exc)))
+                        logger.error("Exception processing %s: %s", src, exc)
+
+        for src in failed_sources:
+            logger.error("Failed: %s", src)
+        for src, message in future_exceptions:
+            logger.error("Exception processing %s: %s", src, message)
 
 
 def build_parser(use_gooey: bool = False) -> argparse.ArgumentParser:
     """Build the CLI or Gooey parser."""
+    defaults = build_gui_defaults() if use_gooey else {}
     parser_cls = GooeyParser if use_gooey and HAS_GOOEY else argparse.ArgumentParser
     parser = parser_cls(
         prog="convert-to-ometif",
@@ -909,56 +1149,78 @@ def build_parser(use_gooey: bool = False) -> argparse.ArgumentParser:
 Example YAML config for run_pipeline.exe:
 ---
 run:
-- name: Convert ND2 files to OME-TIFF (keep largest scene only)
+  - name: Convert ND2 files to OME-TIFF (keep largest scene only)
     environment: uv@3.11:default
-  commands:
-  - python
-  - '%REPO%/standard_code/python/convert_to_tif.py'
-    - --input-folder: '%YAML%/input'
-    - --recursive
-    - --extensions: .nd2
-  - --output-folder: '%YAML%/output'
-  - --log-level: INFO
+    commands:
+      - python
+      - "%REPO%/standard_code/python/convert_to_tif.py"
+      - --input-folder
+      - "%YAML%/input"
+      - --recursive
+      - --extensions
+      - .nd2
+      - --output-folder
+      - "%YAML%/output"
+      - --log-level
+      - INFO
 
-- name: Convert OBF files, keep only MLE scenes
+  - name: Convert OBF files, keep only MLE scenes
     environment: uv@3.11:default
-  commands:
-  - python
-  - '%REPO%/standard_code/python/convert_to_tif.py'
-    - --input-folder: '%YAML%/input'
-    - --recursive
-    - --extensions: .obf
-  - --output-folder: '%YAML%/output'
-  - --scene-filter: includes
-  - --scene-filter-strings: /MLE
-  - --scene-merge-channel
-  - --log-level: INFO
+    commands:
+      - python
+      - "%REPO%/standard_code/python/convert_to_tif.py"
+      - --input-folder
+      - "%YAML%/input"
+      - --recursive
+      - --extensions
+      - .obf
+      - --output-folder
+      - "%YAML%/output"
+      - --scene-filter
+      - includes
+      - --scene-filter-strings
+      - /MLE
+      - --scene-merge-channel
+      - --log-level
+      - INFO
 
-- name: Convert CZI files, exclude overview scenes
+  - name: Convert CZI files, exclude overview scenes
     environment: uv@3.11:default
-  commands:
-  - python
-  - '%REPO%/standard_code/python/convert_to_tif.py'
-    - --input-folder: '%YAML%/input'
-    - --recursive
-    - --extensions: .czi
-  - --output-folder: '%YAML%/output'
-  - --scene-filter: excludes
-  - --scene-filter-strings: Overview
-  - --log-level: INFO
+    commands:
+      - python
+      - "%REPO%/standard_code/python/convert_to_tif.py"
+      - --input-folder
+      - "%YAML%/input"
+      - --recursive
+      - --extensions
+      - .czi
+      - --output-folder
+      - "%YAML%/output"
+      - --scene-filter
+      - excludes
+      - --scene-filter-strings
+      - Overview
+      - --log-level
+      - INFO
 
-- name: Convert LIF files, process all scenes with max projection
+  - name: Convert LIF files, process all scenes with max projection
     environment: uv@3.11:default
-  commands:
-  - python
-  - '%REPO%/standard_code/python/convert_to_tif.py'
-    - --input-folder: '%YAML%/input'
-    - --recursive
-    - --extensions: .lif
-  - --output-folder: '%YAML%/output'
-  - --scene-filter: all
-  - --projection-method: max
-  - --log-level: INFO
+    commands:
+      - python
+      - "%REPO%/standard_code/python/convert_to_tif.py"
+      - --input-folder
+      - "%YAML%/input"
+      - --recursive
+      - --extensions
+      - .lif
+      - --output-folder
+      - "%YAML%/output"
+      - --scene-filter
+      - all
+      - --projection-method
+      - max
+      - --log-level
+      - INFO
         """
     )
 
@@ -970,7 +1232,7 @@ run:
     parser.add_argument(
         "--input-files",
         type=str,
-        default=None,
+        default=defaults.get("input_files", None),
         help=(
             "Optional file selection. If one or more files are selected, those files are processed. "
             "If empty, the folder input is used instead."
@@ -980,153 +1242,41 @@ run:
     parser.add_argument(
         "--input-folder",
         type=str,
-        default="",
+        default=defaults.get("input_folder", ""),
         help="Optional folder input used when no files are selected",
         **chooser_kwargs("DirChooser")
     )
-    parser.add_argument(
-        "--recursive",
-        action="store_true",
-        help="When using folder fallback, search subfolders recursively"
-    )
+    parser.add_argument("--recursive", action="store_true", default=bool(defaults.get("recursive", False)), help="When using folder fallback, search subfolders recursively")
     parser.add_argument(
         "--extensions",
         type=str,
-        default=",".join(COMMON_IMAGE_EXTENSIONS),
+        default=defaults.get("extensions", ",".join(COMMON_IMAGE_EXTENSIONS)),
         help=(
             "Comma-separated extension filter for folder fallback inputs. "
             "Examples: .nd2,.czi or tif,tiff. Use '*' or 'all' to disable filtering."
         )
     )
 
-    parser.add_argument(
-        "--output-folder",
-        type=str,
-        default=None,
-        help="Output folder (default: input_folder + '_tif')",
-        **chooser_kwargs("DirChooser")
-    )
-    
-    parser.add_argument(
-        "--projection-method",
-        type=str,
-        default=None,
-        choices=["max", "sum", "mean", "median", "min", "std"],
-        help="Z-projection method (default: no projection)"
-    )
-    
-    parser.add_argument(
-        "--collapse-delimiter",
-        type=str,
-        default="__",
-        help="Delimiter for collapsing subfolder paths (default: '__')"
-    )
-    
-    parser.add_argument(
-        "--no-parallel",
-        action="store_true",
-        help="Disable parallel processing (process files sequentially)"
-    )
+    parser.add_argument("--output-folder", type=str, default=defaults.get("output_folder", None), help="Output folder (default: input_folder + '_tif')", **chooser_kwargs("DirChooser"))
+    parser.add_argument("--projection-method", type=str, default=defaults.get("projection_method", None), choices=["max", "sum", "mean", "median", "min", "std"], help="Z-projection method (default: no projection)")
+    parser.add_argument("--collapse-delimiter", type=str, default=defaults.get("collapse_delimiter", "__"), help="Delimiter for collapsing subfolder paths (default: '__')")
+    parser.add_argument("--no-parallel", action="store_true", default=bool(defaults.get("no_parallel", False)), help="Disable parallel processing (process files sequentially)")
+    parser.add_argument("--maxcores", type=int, default=defaults.get("maxcores", None), help="Maximum CPU cores to use for parallel processing (default: all available CPU cores minus 1). Ignored if --no-parallel is set.")
+    parser.add_argument("--no-metadata", action="store_true", default=bool(defaults.get("no_metadata", False)), help="Skip saving metadata YAML sidecars")
+    parser.add_argument("--output-suffix", type=str, default=defaults.get("output_suffix", ""), help="Additional suffix to add before .ome.tif")
+    parser.add_argument("--output-format", type=str, choices=["tif", "npy", "ilastik-h5"], default=defaults.get("output_format", "tif"), help="Output format (default: tif). Note: --split requires tif.")
+    parser.add_argument("--dry-run", action="store_true", default=bool(defaults.get("dry_run", False)), help="Print planned actions without executing")
+    parser.add_argument("--split", action="store_true", default=bool(defaults.get("split", False)), help="Save each T, C, Z slice as individual file in a folder (maximum compatibility)")
 
-    parser.add_argument(
-        "--maxcores",
-        type=int,
-        default=None,
-        help="Maximum CPU cores to use for parallel processing (default: all available CPU cores minus 1). Ignored if --no-parallel is set."
-    )
-    
-    parser.add_argument(
-        "--no-metadata",
-        action="store_true",
-        help="Skip saving metadata YAML sidecars"
-    )
-    
-    parser.add_argument(
-        "--output-suffix",
-        type=str,
-        default="",
-        help="Additional suffix to add before .ome.tif"
-    )
-    parser.add_argument(
-        "--output-format",
-        type=str,
-        choices=["tif", "npy", "ilastik-h5"],
-        default="tif",
-        help="Output format (default: tif). Note: --split requires tif.",
-    )
-    
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print planned actions without executing"
-    )
-    
-    parser.add_argument(
-        "--split",
-        action="store_true",
-        help="Save each T, C, Z slice as individual file in a folder (maximum compatibility)"
-    )
-    
-    merging_group = parser.add_argument_group(
-        "Merging",
-        "Options for STED scene filtering and scene-to-channel merging"
-    )
+    merging_group = parser.add_argument_group("Merging", "Options for STED scene filtering and scene-to-channel merging")
+    merging_group.add_argument("--scene-filter", type=str, default=defaults.get("scene_filter", "all"), choices=["all", "largest", "smallest", "includes", "excludes"], help=("Scene selection strategy for multi-scene files (default: all). " "'all' keeps every scene. " "'largest'/'smallest' selects by YX pixel count. " "'includes' keeps scenes whose name contains any --scene-filter-strings value. " "'excludes' removes scenes whose name contains any --scene-filter-strings value."))
+    merging_group.add_argument("--scene-filter-strings", type=str, nargs="+", default=defaults.get("scene_filter_strings", None), metavar="STRING", help=("One or more substrings used with --scene-filter includes/excludes. " "Example: --scene-filter-strings /MLE  or  --scene-filter-strings Overview Tile"))
+    merging_group.add_argument("--scene-merge-channel", action="store_true", default=bool(defaults.get("scene_merge_channel", False)), help=("Group filtered scenes by HH:MM:SS timestamp in scene name and merge " "each timestamp-group into the channel dimension"))
+    merging_group.add_argument("--channels", type=str, default=defaults.get("channels", None), help=("Optional zero-based channel indices to keep. Examples: '0,2', 'x0,2', '[0,2]'. " "Default keeps all channels."))
 
-    merging_group.add_argument(
-        "--scene-filter",
-        type=str,
-        default="all",
-        choices=["all", "largest", "smallest", "includes", "excludes"],
-        help=(
-            "Scene selection strategy for multi-scene files (default: all). "
-            "'all' keeps every scene. "
-            "'largest'/'smallest' selects by YX pixel count. "
-            "'includes' keeps scenes whose name contains any --scene-filter-strings value. "
-            "'excludes' removes scenes whose name contains any --scene-filter-strings value."
-        ),
-    )
-
-    merging_group.add_argument(
-        "--scene-filter-strings",
-        type=str,
-        nargs="+",
-        default=None,
-        metavar="STRING",
-        help=(
-            "One or more substrings used with --scene-filter includes/excludes. "
-            "Example: --scene-filter-strings /MLE  or  --scene-filter-strings Overview Tile"
-        ),
-    )
-
-    merging_group.add_argument(
-        "--scene-merge-channel",
-        action="store_true",
-        help=(
-            "Group filtered scenes by HH:MM:SS timestamp in scene name and merge "
-            "each timestamp-group into the channel dimension"
-        ),
-    )
-
-    merging_group.add_argument(
-        "--channels",
-        type=str,
-        default=None,
-        help=(
-            "Optional zero-based channel indices to keep. Examples: '0,2', 'x0,2', '[0,2]'. "
-            "Default keeps all channels."
-        ),
-    )
-
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {get_application_version()}"
-    )
-
-    parser.add_argument('--log-level', type=str, default='WARNING',
-                    choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                    help='Logging level (default: WARNING)')
-    parser.add_argument('--input-dims-order', type=str, default=None, help='Optional input dimensions order for array-like inputs (for example ZYX or CZYX).')
+    parser.add_argument("--version", action="version", version=f"%(prog)s {get_application_version()}")
+    parser.add_argument("--log-level", type=str, default=defaults.get("log_level", "WARNING"), choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging level (default: WARNING)")
+    parser.add_argument("--input-dims-order", type=str, default=defaults.get("input_dims_order", None), help="Optional input dimensions order for array-like inputs (for example ZYX or CZYX).")
     return parser
 
 
@@ -1134,22 +1284,31 @@ def run_main(argv: Optional[list[str]] = None, use_gooey: bool = False) -> None:
     """Shared runtime for CLI and GUI execution."""
     parser = build_parser(use_gooey=use_gooey)
     args = parser.parse_args(argv)
-    if args.input_dims_order:
-        os.environ['RP_INPUT_DIMS_ORDER'] = args.input_dims_order
-    explicit_files, input_pattern, extension_filters = resolve_input_sources(args, parser)
 
-    # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format='%(asctime)s - %(levelname)s - %(message)s'
+    _configure_logging(args.log_level)
+
+    if args.input_dims_order:
+        os.environ["RP_INPUT_DIMS_ORDER"] = args.input_dims_order
+    explicit_files, input_folder, recursive, extension_filters = resolve_input_sources(args, parser)
+
+    logger.debug(
+        "Runtime configuration: files=%s folder=%s recursive=%s output_folder=%s output_format=%s dry_run=%s",
+        len(explicit_files) if explicit_files else 0,
+        input_folder,
+        recursive,
+        args.output_folder,
+        args.output_format,
+        args.dry_run,
     )
 
-    # Process files
     selected_channels = parse_channel_selection(args.channels)
+
+    remember_run_state(args, selected_channels, explicit_files)
 
     process_files(
         explicit_files=explicit_files,
-        input_pattern=input_pattern,
+        input_folder=input_folder,
+        recursive=recursive,
         output_folder=args.output_folder,
         output_format=args.output_format,
         projection_method=args.projection_method,
@@ -1165,6 +1324,7 @@ def run_main(argv: Optional[list[str]] = None, use_gooey: bool = False) -> None:
         scene_merge_channel=args.scene_merge_channel,
         channels=selected_channels,
         extension_filters=extension_filters,
+        use_gooey=use_gooey,
     )
 
 
@@ -1177,7 +1337,8 @@ def run_main(argv: Optional[list[str]] = None, use_gooey: bool = False) -> None:
     navigation="TABBED",
     tabbed_groups=True,
     clear_before_run=True,
-    monospace_display=True,
+    terminal_font_family="Consolas",
+    progress_regex=r"^.*Progress:\s+(?P<current>\d+)/(?P<total>\d+).*$",
 )
 def launch_gui() -> None:
     """Launch the Gooey desktop interface."""
@@ -1202,6 +1363,7 @@ def entrypoint(argv: Optional[list[str]] = None) -> None:
         return
 
     main(argv=effective_argv)
+
 
 if __name__ == "__main__":
     entrypoint()

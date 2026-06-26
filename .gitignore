@@ -7,3 +7,6 @@ __pycache__/
 .eggs/
 build/
 dist/
+
+# Per-user GUI state files
+convert_to_ometif/last_run_state.json

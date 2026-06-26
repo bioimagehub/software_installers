@@ -1,0 +1,30 @@
+2026-06-26 09:47:23,117 - DEBUG - Debug file logging enabled: C:\biphub\git\software_installers\convert_to_ometif\convert_to_ometif.debug.log
+2026-06-26 09:47:23,117 - DEBUG - Resolving input sources: input_files='' input_folder='test_logging/input' recursive=True
+2026-06-26 09:47:23,117 - DEBUG - Parsed extension filters: ['.npy']
+2026-06-26 09:47:23,117 - DEBUG - Using folder mode: folder=C:\biphub\git\software_installers\convert_to_ometif\test_logging\input recursive=True extensions=['.npy']
+2026-06-26 09:47:23,117 - DEBUG - Runtime configuration: files=0 folder=C:\biphub\git\software_installers\convert_to_ometif\test_logging\input recursive=True output_folder=test_logging/output output_format=npy dry_run=False
+2026-06-26 09:47:23,117 - DEBUG - Processing folder mode
+2026-06-26 09:47:23,117 - DEBUG - Scanning recursively under C:\biphub\git\software_installers\convert_to_ometif\test_logging\input
+2026-06-26 09:47:23,117 - DEBUG - Extension filter reduced file list: 2 -> 2
+2026-06-26 09:47:23,117 - INFO - Found 2 file(s) to process
+2026-06-26 09:47:23,117 - INFO - Output folder: test_logging/output
+2026-06-26 09:47:23,117 - DEBUG - Prepared 2 file pair(s)
+2026-06-26 09:47:23,117 - INFO - Processing with 2 workers
+2026-06-26 09:47:23,117 - DEBUG - Starting parallel processing for 2 file(s)
+2026-06-26 09:47:27,744 - DEBUG - Completed: C:\biphub\git\software_installers\convert_to_ometif\test_logging\input\b.npy -> test_logging/output\b.npy
+2026-06-26 09:47:27,744 - DEBUG - Completed: C:\biphub\git\software_installers\convert_to_ometif\test_logging\input\a.npy -> test_logging/output\a.npy
+2026-06-26 09:47:57,727 - DEBUG - Debug file logging enabled: C:\biphub\git\software_installers\convert_to_ometif\convert_to_ometif.debug.log
+2026-06-26 09:47:57,727 - DEBUG - Resolving input sources: input_files='' input_folder='test_logging/input' recursive=True
+2026-06-26 09:47:57,727 - DEBUG - Parsed extension filters: ['.npy']
+2026-06-26 09:47:57,727 - DEBUG - Using folder mode: folder=C:\biphub\git\software_installers\convert_to_ometif\test_logging\input recursive=True extensions=['.npy']
+2026-06-26 09:47:57,727 - DEBUG - Runtime configuration: files=0 folder=C:\biphub\git\software_installers\convert_to_ometif\test_logging\input recursive=True output_folder=test_logging/output output_format=npy dry_run=False
+2026-06-26 09:47:57,727 - DEBUG - Processing folder mode
+2026-06-26 09:47:57,727 - DEBUG - Scanning recursively under C:\biphub\git\software_installers\convert_to_ometif\test_logging\input
+2026-06-26 09:47:57,727 - DEBUG - Extension filter reduced file list: 2 -> 2
+2026-06-26 09:47:57,727 - INFO - Found 2 file(s) to process
+2026-06-26 09:47:57,727 - INFO - Output folder: test_logging/output
+2026-06-26 09:47:57,727 - DEBUG - Prepared 2 file pair(s)
+2026-06-26 09:47:57,727 - INFO - Processing with 2 workers
+2026-06-26 09:47:57,727 - DEBUG - Starting parallel processing for 2 file(s)
+2026-06-26 09:48:01,150 - DEBUG - Completed: C:\biphub\git\software_installers\convert_to_ometif\test_logging\input\b.npy -> test_logging/output\b.npy
+2026-06-26 09:48:01,150 - DEBUG - Completed: C:\biphub\git\software_installers\convert_to_ometif\test_logging\input\a.npy -> test_logging/output\a.npy
