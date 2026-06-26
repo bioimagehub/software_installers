@@ -11,6 +11,7 @@ import logging
 import re
 import json
 import sys
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -195,6 +196,28 @@ def parse_selected_files(input_files: Optional[str]) -> list[str]:
     return resolved
 
 
+def summarize_file_types(files: list[str]) -> str:
+    """Return a compact summary of the file types in files."""
+    if not files:
+        return "0 files"
+
+    counts: Counter[str] = Counter()
+    extensions = sorted(COMMON_IMAGE_EXTENSIONS, key=len, reverse=True)
+    for file_path in files:
+        lower_path = file_path.lower()
+        matched_extension = None
+        for extension in extensions:
+            if lower_path.endswith(extension):
+                matched_extension = extension
+                break
+        if matched_extension is None:
+            matched_extension = Path(file_path).suffix.lower() or "[no extension]"
+        counts[matched_extension] += 1
+
+    parts = [f"{count} {extension}" for extension, count in sorted(counts.items(), key=lambda item: item[0])]
+    return f"{len(files)} files ({', '.join(parts)})"
+
+
 def get_gui_state_path() -> Path:
     """Return the per-user path used to remember the last GUI selections."""
     base_dir = os.environ.get("APPDATA")
@@ -257,7 +280,9 @@ def build_gui_defaults() -> dict[str, object]:
         "log_level": state.get("log_level", "WARNING"),
         "input_dims_order": state.get("input_dims_order", None),
     }
-    if defaults.get("input_files"):
+    if defaults.get("input_folder"):
+        defaults["input_files"] = ""
+    elif defaults.get("input_files"):
         defaults["input_folder"] = ""
     return defaults
 
@@ -265,7 +290,7 @@ def build_gui_defaults() -> dict[str, object]:
 def remember_run_state(args: argparse.Namespace, selected_channels: Optional[list[int]], explicit_files: Optional[list[str]]) -> None:
     """Capture the most useful fields from the current run for the next GUI launch."""
     state: dict[str, object] = {
-        "input_files": ";".join(explicit_files) if explicit_files else None,
+        "input_files": ";".join(explicit_files) if explicit_files else "",
         "input_folder": "" if explicit_files else (args.input_folder or ""),
         "recursive": bool(args.recursive),
         "extensions": args.extensions,
@@ -1012,7 +1037,10 @@ def process_files(
             logger.error("No files found %s: %s%s", mode, source_folder, suffix_text)
         return
 
-    logger.info("Found %d file(s) to process", len(files))
+    if not use_gooey:
+        print(f"Found files: {summarize_file_types(files)}")
+    else:
+        logger.info("Found %d file(s) to process", len(files))
 
     if explicit_files:
         base_folder = os.path.commonpath(files)
@@ -1101,6 +1129,7 @@ def process_files(
         done = 0
 
         if use_gooey:
+            print(f"progress: 0/{total}", flush=True)
             for future in as_completed(futures):
                 src, dst = futures[future]
                 try:
@@ -1115,10 +1144,17 @@ def process_files(
                     logger.error("Exception processing %s: %s", src, exc)
                 finally:
                     done += 1
-                    logger.info("Progress: %d/%d", done, total)
+                    print(f"progress: {done}/{total}", flush=True)
         else:
             with _mute_console_logging():
-                for future in tqdm(as_completed(futures), total=total, desc="Processing files", unit="file"):
+                for future in tqdm(
+                    as_completed(futures),
+                    total=total,
+                    desc="Processing files",
+                    unit="file",
+                    file=sys.stdout,
+                    dynamic_ncols=True,
+                ):
                     src, dst = futures[future]
                     try:
                         success = future.result()
@@ -1291,6 +1327,21 @@ def run_main(argv: Optional[list[str]] = None, use_gooey: bool = False) -> None:
         os.environ["RP_INPUT_DIMS_ORDER"] = args.input_dims_order
     explicit_files, input_folder, recursive, extension_filters = resolve_input_sources(args, parser)
 
+    if not use_gooey:
+        print("Input args:")
+        print(f"  input_files={args.input_files}")
+        print(f"  input_folder={args.input_folder}")
+        print(f"  recursive={args.recursive}")
+        print(f"  extensions={args.extensions}")
+        print(f"  output_folder={args.output_folder}")
+        print(f"  output_format={args.output_format}")
+        print(f"  projection_method={args.projection_method}")
+        print(f"  no_parallel={args.no_parallel}")
+        print(f"  split={args.split}")
+        print(f"  scene_filter={args.scene_filter}")
+        print(f"  scene_merge_channel={args.scene_merge_channel}")
+        print(f"  channels={args.channels}")
+
     logger.debug(
         "Runtime configuration: files=%s folder=%s recursive=%s output_folder=%s output_format=%s dry_run=%s",
         len(explicit_files) if explicit_files else 0,
@@ -1338,7 +1389,8 @@ def run_main(argv: Optional[list[str]] = None, use_gooey: bool = False) -> None:
     tabbed_groups=True,
     clear_before_run=True,
     terminal_font_family="Consolas",
-    progress_regex=r"^.*Progress:\s+(?P<current>\d+)/(?P<total>\d+).*$",
+    progress_regex=r"^progress:\s+(?P<current>\d+)/(?P<total>\d+)$",
+    progress_expr="current / total * 100",
 )
 def launch_gui() -> None:
     """Launch the Gooey desktop interface."""
@@ -1352,6 +1404,18 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 def entrypoint(argv: Optional[list[str]] = None) -> None:
     """Run CLI when arguments are supplied, otherwise start the Gooey GUI."""
+    # When Gooey runs the program it spawns a child process with the GOOEY
+    # environment variable set and passes --ignore-gooey (already stripped from
+    # sys.argv by the @Gooey decorator at import time). That child must run in
+    # Gooey mode so progress is emitted as newline-terminated "progress: N/total"
+    # lines that Gooey's stdout reader can parse live. Routing it through main()
+    # would instead use the tqdm progress bar, whose carriage-return output is
+    # never newline-terminated until completion, so Gooey buffers it and only
+    # shows the progress once every file has finished.
+    if argv is None and HAS_GOOEY and os.environ.get("GOOEY") == "1":
+        launch_gui()
+        return
+
     effective_argv = sys.argv[1:] if argv is None else argv
     if not effective_argv:
         if not HAS_GOOEY:
