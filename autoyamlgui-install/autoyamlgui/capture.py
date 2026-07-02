@@ -175,15 +175,23 @@ class CaptureSession:
         self._stop = True
 
     def _record_click(self, click_x: int, click_y: int) -> None:
-        """Record a click + screenshot without opening a dialog."""
+        """Record a click + screenshot without opening a dialog.
+
+        pynput reports logical (scaled) coordinates on high-DPI Windows.
+        Convert to physical pixels to match the mss screenshot.
+        """
+        from .dpi import logical_to_physical
+
+        phys_x, phys_y = logical_to_physical(click_x, click_y)
+
         monitor = self._sct.monitors[0]
         raw = self._sct.grab(monitor)
         screenshot = np.array(raw)[:, :, :3]
         screenshot_rgb = screenshot[:, :, ::-1]
         img = Image.fromarray(screenshot_rgb)
 
-        self.pending.append(PendingClick(x=click_x, y=click_y, screenshot=img))
-        print(f"  Recorded click #{len(self.pending)} at ({click_x}, {click_y})")
+        self.pending.append(PendingClick(x=phys_x, y=phys_y, screenshot=img))
+        print(f"  Recorded click #{len(self.pending)} at logical ({click_x}, {click_y}) -> physical ({phys_x}, {phys_y})")
 
     def _process_pending(self, root: tk.Tk) -> None:
         """Process all pending clicks: open crop dialog for each, save images + steps."""
