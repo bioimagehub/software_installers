@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "convert-to-ometif"
+version = "0.1.0"
+description = "Convert microscopy image files to OME-TIFF, TIFF, NPY, or Ilastik H5 from CLI or GUI"
+readme = "README.md"
+requires-python = "==3.10.*"
+dependencies =[
+    "numpy>=2.1",
+    "PyYAML",
+    "tqdm",
+    "h5py",
+    "dask[array]",
+    "tifffile",
+    "nd2reader",
+
+    "jdk4py>=21.0.8.0",
+    "scyjava>=1.12.4",
+    "bioio",
+    "bioio-bioformats",
+    "bioio-ome-tiff>=1.3,<2",
+    "bioio-tifffile",
+    "bioio-nd2",
+    "bioio_lif",
+    "bioio_czi",
+    "bioio_dv",
+    "Gooey>=1.0.8.1",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'win32'"]
+
+[project.scripts]
+convert-to-ometif = "convert_to_tif:entrypoint"
+
+[tool.setuptools]
+py-modules = ["convert_to_tif", "bioimage_pipeline_utils", "extract_metadata"]
+
+[tool.setuptools.packages.find]
+include = ["bioio_ilastik_h5", "bioio_imaris"]
