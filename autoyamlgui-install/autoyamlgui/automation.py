@@ -48,6 +48,18 @@ def capture_screen() -> np.ndarray:
     return img
 
 
+def _virtual_desktop_origin() -> tuple[int, int]:
+    """Return the (left, top) origin of the virtual desktop from mss.
+
+    When a second monitor is positioned above the primary, the origin has
+    a negative top value. Coordinates from cv2.matchTemplate are in image
+    space (0-based), so we must add this origin to get virtual desktop
+    coordinates for pyautogui.
+    """
+    mon = _sct.monitors[0]
+    return (mon["left"], mon["top"])
+
+
 # ---------------------------------------------------------------------------
 # Image matching
 # ---------------------------------------------------------------------------
@@ -95,14 +107,20 @@ def find_button(image_path: str, confidence: float = 0.8) -> Tuple[int, int] | N
     if max_val >= confidence:
         cx = int(max_loc[0] + tw / 2)
         cy = int(max_loc[1] + th / 2)
+        # Convert from image-space to virtual-desktop coordinates
+        origin_x, origin_y = _virtual_desktop_origin()
+        vx = cx + origin_x
+        vy = cy + origin_y
         logger.debug(
-            "Found %s at (%d, %d) with confidence %.3f",
+            "Found %s at image (%d, %d) -> virtual (%d, %d) with confidence %.3f",
             os.path.basename(image_path),
             cx,
             cy,
+            vx,
+            vy,
             max_val,
         )
-        return (cx, cy)
+        return (vx, vy)
 
     logger.debug(
         "Did not find %s (best confidence %.3f < %.2f)",
