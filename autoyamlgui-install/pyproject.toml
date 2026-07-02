@@ -1,0 +1,31 @@
+[project]
+name = "autoyamlgui"
+version = "0.1.0"
+description = "Cross-platform GUI automation tool driven by YAML config files"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyautogui>=0.9.54",
+    "opencv-python>=4.8.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "pillow>=10.0.0",
+    "mss>=9.0.0",
+    "numpy>=1.24.0",
+    "pynput>=1.7.6",
+]
+
+[project.scripts]
+autoyamlgui = "autoyamlgui.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["autoyamlgui"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

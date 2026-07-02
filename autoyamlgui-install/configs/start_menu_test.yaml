@@ -1,0 +1,27 @@
+name: "Ollama start sequence"
+defaults:
+  timeout: inf
+  confidence: 0.8
+
+environment:
+  buttonpath: 'E:\Oyvind\OF_git\biphub_andreas_brech\autoyamlgui\buttons'
+
+steps:
+  - button: 'start.png'          # command defaults to: click
+  - wait: 5s
+  - button: 'ollama.png'
+    command: wait_disappear      # alternatives: click (default) | wait_appear | wait_disappear
+    timeout: 1m
+  - button: 'start.png'
+    timeout: 1m
+  - button: 'search.png'
+    command: click_and_type
+    text: 'ollama run glm-5.2:cloud'
+    enter: true       # optional: press Enter after typing
+  - repeat:
+      from: 2        # 1-based step index to jump back to
+      times: 3       # number of iterations
+      delay: 1s      # optional pause between iterations
+  
+    
+    

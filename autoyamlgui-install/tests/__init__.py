@@ -1,0 +1,1 @@
+# autoyamlgui package tests
