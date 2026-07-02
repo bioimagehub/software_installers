@@ -1,0 +1,27 @@
+Output directory: D:/BIPHUB-Oeyvind/test_gui
+Buttons folder:   D:/BIPHUB-Oeyvind/test_gui\buttons
+
+============================================================
+  Capture mode active
+  Click freely to record button clicks.
+  Press Ctrl+S to crop, name, and save the recorded clicks.
+  Press Escape (or Ctrl+C) to finish and save the YAML.
+============================================================
+
+12:43:02 [INFO] DPI scale detected: 1.000 (logical 3840x2160, physical 3840x2160)
+  Recorded click #1 at logical (273, 1080) -> physical (273, 1080)
+  Recorded click #2 at logical (273, 1080) -> physical (273, 1080)
+  Recorded click #3 at logical (273, 1080) -> physical (273, 1080)
+
+Processing 3 recorded click(s)...
+
+  Click 1 of 3 at (273, 1080)
+    Skipped (not saved).
+
+  Click 2 of 3 at (273, 1080)
+    Skipped (not saved).
+
+  Click 3 of 3 at (273, 1080)
+    Skipped (not saved).
+
+No steps captured. No YAML file written.
