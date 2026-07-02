@@ -25,9 +25,12 @@ REM Download UV (using PowerShell for better reliability)
 echo Downloading UV...
 powershell -Command "& {$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://astral.sh/uv/install.ps1' -OutFile '%TEMP%\uv_install.ps1'}"
 
-REM Run the UV installer with user-specific path
+REM Run the UV installer with user-specific path.
+REM The official install.ps1 does not accept an -InstallDir parameter;
+REM it reads the install location from the UV_INSTALL_DIR env var instead.
 echo Installing UV to %INSTALL_DIR%...
-powershell -ExecutionPolicy Bypass -File "%TEMP%\uv_install.ps1" -InstallDir "%INSTALL_DIR%"
+set "UV_INSTALL_DIR=%INSTALL_DIR%"
+powershell -ExecutionPolicy Bypass -File "%TEMP%\uv_install.ps1"
 
 REM Add UV to user PATH if not already present
 for /f "tokens=2*" %%A in ('reg query "HKEY_CURRENT_USER\Environment" /v PATH 2^>nul') do set "CURRENT_PATH=%%B"
