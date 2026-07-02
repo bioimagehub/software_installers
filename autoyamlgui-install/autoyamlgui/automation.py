@@ -148,14 +148,11 @@ def click_button(
     while True:
         pos = find_button(image_path, confidence)
         if pos is not None:
-            # find_button returns physical pixels (mss space);
-            # pyautogui expects logical (scaled) coordinates on high-DPI Windows.
-            from .dpi import physical_to_logical
-            lx, ly = physical_to_logical(pos[0], pos[1])
-            pyautogui.click(lx, ly)
+            # With DPI awareness set in __init__.py, pyautogui uses
+            # physical pixel coordinates that match mss/find_button directly.
+            pyautogui.click(pos[0], pos[1])
             park_mouse()
-            logger.info("Clicked: %s at physical (%d,%d) -> logical (%d,%d)",
-                        os.path.basename(image_path), pos[0], pos[1], lx, ly)
+            logger.info("Clicked: %s", os.path.basename(image_path))
             return True
 
         # Not found — park mouse to clear hover before retry
