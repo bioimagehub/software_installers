@@ -10,7 +10,7 @@ steps:
   - button: 'start.png'          # command defaults to: click
   - wait: 5s
   - button: 'ollama.png'
-    command: wait_disappear      # alternatives: click (default) | wait_appear | wait_disappear
+    command: wait_disappear      # alternatives: click (default) | click_double | wait_appear | wait_disappear
     timeout: 1m
   - button: 'start.png'
     timeout: 1m

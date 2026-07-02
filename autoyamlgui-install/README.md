@@ -26,11 +26,18 @@ screen. For each click:
 2. A crop window opens showing the area around your click, zoomed 2×.
 3. Draw a rectangle around the button you want to capture.
 4. Enter a name, choose a command (`click`, `wait_appear`, `wait_disappear`,
-   `click_and_type`), and optionally enter text + Enter.
+  `click_double`, `click_and_type`), and optionally enter text + Enter.
 5. The cropped image is saved to `<outdir>/buttons/<name>.png`.
 6. A step is appended to the YAML config.
 
 When you're done, the config is written to `<outdir>/config.yaml`.
+
+If `<outdir>/config.yaml` already exists, capture mode asks whether to:
+- continue working on the existing config (append new captured steps), or
+- archive it as `config_legacy_N.yaml` and start a new config.
+
+If you continue with an existing config, capture mode also asks whether to run
+the existing steps before starting new recordings.
 
 ```bash
 uv run autoyamlgui --capture
@@ -109,6 +116,7 @@ Find an image on screen and perform an action on it.
 | Command | Description |
 |---|---|
 | `click` *(default)* | Find the button image on screen and click it |
+| `click_double` | Find the button image on screen and double-click it |
 | `wait_appear` | Wait until the button image appears on screen |
 | `wait_disappear` | Wait until the button image is no longer on screen |
 | `click_and_type` | Click the button, then type `text` into the focused field |

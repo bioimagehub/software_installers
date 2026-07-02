@@ -78,6 +78,10 @@ class Runner:
             return automation.click_button(
                 step.button, step.confidence or 0.8, step.timeout
             )
+        elif cmd == Command.click_double:
+            return automation.click_double_button(
+                step.button, step.confidence or 0.8, step.timeout
+            )
         elif cmd == Command.wait_appear:
             return automation.wait_appear(
                 step.button, step.confidence or 0.8, step.timeout

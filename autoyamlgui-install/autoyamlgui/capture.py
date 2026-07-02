@@ -40,6 +40,16 @@ ZOOM_HALF = 300
 ZOOM_SCALE = 2
 
 
+def _next_legacy_config_path(outdir: str) -> str:
+    """Return the next available config legacy filename in the output dir."""
+    idx = 1
+    while True:
+        candidate = os.path.join(outdir, f"config_legacy_{idx}.yaml")
+        if not os.path.exists(candidate):
+            return candidate
+        idx += 1
+
+
 @dataclass
 class PendingClick:
     """A recorded click waiting to be processed (cropped + named)."""
@@ -67,6 +77,10 @@ class CaptureSession:
     outdir: str
     buttons_dir: str
     buttonpath: str
+    name: str = "Captured script"
+    defaults: dict = field(
+        default_factory=lambda: {"timeout": "inf", "confidence": 0.8}
+    )
     steps: List[CapturedStep] = field(default_factory=list)
     pending: List[PendingClick] = field(default_factory=list)
     _sct: mss.MSS = field(default_factory=mss.MSS)
@@ -272,8 +286,8 @@ class CaptureSession:
             return
 
         config = {
-            "name": "Captured script",
-            "defaults": {"timeout": "inf", "confidence": 0.8},
+            "name": self.name,
+            "defaults": self.defaults,
             "environment": {"buttonpath": self.buttonpath},
             "steps": [],
         }
@@ -382,7 +396,13 @@ def _show_crop_dialog(
     tk.Label(frame, text="Command:").grid(row=1, column=0, sticky="w")
     command_var = tk.StringVar(value="click")
     tk.OptionMenu(
-        frame, command_var, "click", "wait_appear", "wait_disappear", "click_and_type"
+        frame,
+        command_var,
+        "click",
+        "click_double",
+        "wait_appear",
+        "wait_disappear",
+        "click_and_type",
     ).grid(row=1, column=1, padx=5, sticky="w")
 
     tk.Label(frame, text="Text (for click_and_type):").grid(row=2, column=0, sticky="w")
@@ -467,14 +487,79 @@ def run_capture() -> int:
     outdir = filedialog.askdirectory(
         title="Choose output directory for the new YAML config and buttons folder"
     )
-    root.destroy()
 
     if not outdir:
+        root.destroy()
         print("No directory selected. Exiting.")
         return 1
 
-    buttons_dir = os.path.join(outdir, "buttons")
+    config_path = os.path.join(outdir, "config.yaml")
+    session_name = "Captured script"
+    session_defaults = {"timeout": "inf", "confidence": 0.8}
+    session_steps: list[CapturedStep] = []
+    run_existing_steps = False
+
+    # Default button path for a new capture session
+    buttonpath = os.path.join(outdir, "buttons")
+
+    if os.path.isfile(config_path):
+        answer = messagebox.askyesnocancel(
+            "Existing config found",
+            "config.yaml already exists in this folder.\n\n"
+            "Yes: Continue working on the existing config\n"
+            "No: Archive existing config and start a new one\n"
+            "Cancel: Abort capture mode",
+        )
+
+        if answer is None:
+            root.destroy()
+            print("Capture mode cancelled by user.")
+            return 1
+
+        if answer is False:
+            legacy_path = _next_legacy_config_path(outdir)
+            os.replace(config_path, legacy_path)
+            print(f"Archived existing config: {legacy_path}")
+        else:
+            with open(config_path, "r", encoding="utf-8") as f:
+                existing = yaml.safe_load(f) or {}
+
+            session_name = existing.get("name") or "Captured script"
+            existing_defaults = existing.get("defaults")
+            if isinstance(existing_defaults, dict):
+                session_defaults = existing_defaults
+
+            env = existing.get("environment")
+            if isinstance(env, dict) and isinstance(env.get("buttonpath"), str):
+                bp = env["buttonpath"]
+                if os.path.isabs(bp):
+                    buttonpath = bp
+                else:
+                    buttonpath = os.path.normpath(os.path.join(outdir, bp))
+
+            for raw_step in existing.get("steps", []):
+                if not isinstance(raw_step, dict) or "button" not in raw_step:
+                    continue
+                session_steps.append(
+                    CapturedStep(
+                        button=raw_step["button"],
+                        command=raw_step.get("command", "click"),
+                        text=raw_step.get("text"),
+                        enter=bool(raw_step.get("enter", False)),
+                        timeout=raw_step.get("timeout", "inf"),
+                    )
+                )
+            print(f"Loaded existing config with {len(session_steps)} step(s): {config_path}")
+
+            if session_steps:
+                run_existing_steps = messagebox.askyesno(
+                    "Run existing steps first?",
+                    "Do you want to run the existing steps before starting new recordings?",
+                )
+
+    buttons_dir = buttonpath
     os.makedirs(buttons_dir, exist_ok=True)
+    root.destroy()
 
     print(f"Output directory: {outdir}")
     print(f"Buttons folder:   {buttons_dir}")
@@ -483,6 +568,26 @@ def run_capture() -> int:
         outdir=outdir,
         buttons_dir=buttons_dir,
         buttonpath=buttons_dir,
+        name=session_name,
+        defaults=session_defaults,
+        steps=session_steps,
     )
+
+    if run_existing_steps and session_steps:
+        print("\nRunning existing steps before recording...")
+        try:
+            from .loader import load_config
+            from .runner import Runner
+
+            parsed = load_config(config_path)
+            success = Runner(parsed).run()
+            if success:
+                print("Existing steps completed. Starting recording mode.")
+            else:
+                print("Existing steps failed. Starting recording mode anyway.")
+        except Exception as e:
+            print(f"Could not run existing steps: {e}")
+            print("Starting recording mode anyway.")
+
     session.start()
     return 0

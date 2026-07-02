@@ -57,6 +57,7 @@ class Command(str, Enum):
     """Actions that can be performed on a button image."""
 
     click = "click"
+    click_double = "click_double"
     wait_appear = "wait_appear"
     wait_disappear = "wait_disappear"
     click_and_type = "click_and_type"

@@ -94,6 +94,10 @@ class TestButtonStep:
         assert step.command == Command.wait_disappear
         assert step.timeout == 60.0
 
+    def test_click_double(self):
+        step = ButtonStep(button="explorer.png", command="click_double")
+        assert step.command == Command.click_double
+
     def test_click_and_type_requires_text(self):
         with pytest.raises(ValidationError):
             ButtonStep(button="search.png", command="click_and_type")

@@ -166,6 +166,7 @@ def click_button(
     while True:
         pos = find_button(image_path, confidence)
         if pos is not None:
+            print(f"Found {os.path.basename(image_path)} at ({pos[0]}, {pos[1]})")
             # With DPI awareness set in __init__.py, pyautogui uses
             # physical pixel coordinates that match mss/find_button directly.
             pyautogui.click(pos[0], pos[1])
@@ -179,6 +180,46 @@ def click_button(
         if deadline is not None and time.monotonic() >= deadline:
             logger.warning(
                 "Timed out waiting to click: %s", os.path.basename(image_path)
+            )
+            return False
+
+        time.sleep(POLL_INTERVAL)
+
+
+def click_double_button(
+    image_path: str,
+    confidence: float = 0.8,
+    timeout: float = float("inf"),
+) -> bool:
+    """Poll for a button on screen, double-click it, then park the mouse.
+
+    Args:
+        image_path: Absolute path to the button image.
+        confidence: Match threshold.
+        timeout: Max seconds to wait. ``inf`` means wait forever.
+
+    Returns:
+        True if the button was found and double-clicked, False on timeout.
+    """
+    deadline = time.monotonic() + timeout if timeout != float("inf") else None
+
+    while True:
+        pos = find_button(image_path, confidence)
+        if pos is not None:
+            print(f"Found {os.path.basename(image_path)} at ({pos[0]}, {pos[1]})")
+            # With DPI awareness set in __init__.py, pyautogui uses
+            # physical pixel coordinates that match mss/find_button directly.
+            pyautogui.click(pos[0], pos[1], clicks=2, interval=0.1)
+            park_mouse()
+            logger.info("Double-clicked: %s", os.path.basename(image_path))
+            return True
+
+        # Not found — park mouse to clear hover before retry
+        park_mouse()
+
+        if deadline is not None and time.monotonic() >= deadline:
+            logger.warning(
+                "Timed out waiting to double-click: %s", os.path.basename(image_path)
             )
             return False
 

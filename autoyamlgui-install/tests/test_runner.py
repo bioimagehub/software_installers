@@ -40,6 +40,15 @@ class TestRunnerDispatch:
         mock_automation.click_button.assert_called_once()
 
     @patch("autoyamlgui.runner.automation")
+    def test_click_double_step(self, mock_automation):
+        mock_automation.click_double_button.return_value = True
+        step = ButtonStep(button="/tmp/start.png", command=Command.click_double)
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.click_double_button.assert_called_once()
+
+    @patch("autoyamlgui.runner.automation")
     def test_wait_appear_step(self, mock_automation):
         mock_automation.wait_appear.return_value = True
         step = ButtonStep(button="/tmp/x.png", command=Command.wait_appear)
