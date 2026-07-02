@@ -1,0 +1,17 @@
+Microsoft Windows [Version 10.0.19045.4412]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\radiumu1>D:\BIPHUB-Oeyvind\git\software_installers\uv_install\install_uv_windoes.bat
+Checking if UV is already installed...
+Downloading UV...
+Installing UV to C:\Users\radiumu1\AppData\Local\uv...
+C:\Users\radiumu1\AppData\Local\Temp\uv_install.ps1 : A parameter cannot be found that matches parameter name
+'InstallDir'.
+    + CategoryInfo          : InvalidArgument: (:) [uv_install.ps1], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : NamedParameterNotFound,uv_install.ps1
+
+Checking if UV is already in PATH...
+UV is already in PATH.
+
+Installation complete Please restart your terminal or command prompt for changes to take effect.
+Press any key to continue . . .
