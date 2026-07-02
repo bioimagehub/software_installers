@@ -41,21 +41,25 @@ def _detect_scale() -> float:
 
     try:
         import ctypes
-        import mss
 
-        # Logical screen size (what pynput/pyautogui see when not DPI-aware)
+        # Logical screen size — what pynput/pyautogui see.
+        # GetSystemMetrics returns logical pixels when the process is NOT
+        # DPI-aware (which is our case), and physical pixels when it IS.
         SM_CXSCREEN = 0
         SM_CYSCREEN = 1
         logical_w = ctypes.windll.user32.GetSystemMetrics(SM_CXSCREEN)
         logical_h = ctypes.windll.user32.GetSystemMetrics(SM_CYSCREEN)
 
-        # Physical screen size (what mss captures)
-        sct = mss.MSS()
-        monitor = sct.monitors[0]
-        physical_w = monitor["width"]
-        physical_h = monitor["height"]
+        # Physical screen size — always returns the real resolution
+        # regardless of DPI awareness, via GetDeviceCaps.
+        hdc = ctypes.windll.user32.GetDC(0)
+        DESKTOPHORZRES = 118
+        DESKTOPVERTRES = 117
+        physical_w = ctypes.windll.gdi32.GetDeviceCaps(hdc, DESKTOPHORZRES)
+        physical_h = ctypes.windll.gdi32.GetDeviceCaps(hdc, DESKTOPVERTRES)
+        ctypes.windll.user32.ReleaseDC(0, hdc)
 
-        if logical_w > 0 and logical_h > 0:
+        if logical_w > 0 and logical_h > 0 and physical_w > 0 and physical_h > 0:
             scale_x = physical_w / logical_w
             scale_y = physical_h / logical_h
             # Use the average; they should be equal in practice
