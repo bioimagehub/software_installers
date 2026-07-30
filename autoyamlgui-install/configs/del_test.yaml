@@ -1,0 +1,13 @@
+name: Captured script
+defaults:
+  timeout: inf
+  confidence: 0.8
+environment:
+  buttonpath: D:/BIPHUB-Oeyvind/test_gui\buttons
+
+
+steps:
+- button: use existing edge displacement file.png
+  command: click_if_exists # this will unselect it
+  timeout: 2s # if this is wrongly selected
+  confidence: 1

@@ -1,0 +1,89 @@
+name: Captured script
+defaults:
+  timeout: inf
+  confidence: 0.8
+environment:
+  buttonpath: D:/BIPHUB-Oeyvind/test_gui\buttons
+
+
+steps:
+# 0 ) Close all Etomo windows if they are open
+- window: '* - Etomo'
+  timeout: 1s
+  action: close_all
+
+# Start etomo
+# 1) Launch a standard Windows program from the command line
+- cmd: 'cd C:\Program Files\IMOD\bin'
+- cmd: 'etomo.jar'
+  background: true
+
+# 2) Start blend mode
+- button: blend
+  window: 'Front Page - Etomo'
+  timeout: 30s
+
+# 3) Click on the "Montage" option
+- button: select_montage
+
+# 3.1 Select file 
+- button: browse
+# - button: file_path
+#   command: click_and_type
+#   text: "D:/BIPHUB-Oeyvind/test_gui/test_AB/AB-768-3-2023-2-E4-1_2x2.mrc" # TODO: make this a variable and accept txt files as input
+# - button: open_file
+# - button: OK_fileselector
+
+- window: '*Project Log' # Wait until the Project Log window appears, (when user have selected a file)
+  timeout: 10s
+  action: minimize
+
+- window: '*Project Log'
+  timeout: 10s
+  action: minimize
+
+
+# 4) Wait for the user to select a Stack and press "OK" (until the "Starting Serial Sections Interface" window appears)
+- button: wait for starting serial sections interface.png
+  command: wait_appear
+
+# 5) Initial blend
+- button: select initial blend.png
+  timeout: 2s # if wrong tab selected
+
+- button: use existing edge displacement file.png
+  command: click_if_exists # this will unselect it
+  timeout: 2s # if this is wrongly selected
+  confidence: 1
+
+- button: sloppy image.png
+  timeout: 2s
+- button: make blended stack.png
+
+- button: blend_done.png
+  command: wait_appear
+
+- window: 'genhstplt*'
+  timeout: 30s
+  action: close
+
+
+# 6) Alignment
+- button: align_tab.png
+- button: initial auto alignment.png
+- button: align_done.png
+  command: wait_appear
+
+- button: Refine with auto alignment.png
+- button: align_done.png
+  command: wait_appear
+
+
+# 7) Make stack
+- button: make_stack_tab.png
+- wait: 1s
+- button: make_aligned_stack.png
+- wait: 3s
+- button: align_done.png
+  command: wait_appear
+

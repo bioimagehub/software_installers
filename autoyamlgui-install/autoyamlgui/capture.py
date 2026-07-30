@@ -60,6 +60,18 @@ class PendingClick:
 
 
 @dataclass
+class ProcessedClick:
+    """A reviewed click decision before being committed to YAML/files."""
+
+    action: str  # "save" | "skip"
+    name: str | None = None
+    command: str = "click"
+    text: str | None = None
+    enter: bool = False
+    cropped: Image.Image | None = None
+
+
+@dataclass
 class CapturedStep:
     """A fully processed step ready for the YAML config."""
 
@@ -91,6 +103,7 @@ class CaptureSession:
     _ctrl_held: bool = False
     _busy: bool = False
     _stop: bool = False
+    _needs_save: bool = False
 
     def start(self) -> None:
         """Start listening for mouse clicks and keyboard shortcuts."""
@@ -152,7 +165,8 @@ class CaptureSession:
 
         root.destroy()
 
-        self._save_yaml()
+        if self._needs_save:
+            self._save_yaml()
 
     def _on_click(self, x, y, button, pressed) -> None:
         """Called by pynput in background thread. Queue the click."""
@@ -224,40 +238,87 @@ class CaptureSession:
         total = len(self.pending)
         print(f"\nProcessing {total} recorded click(s)...")
 
-        for i, click in enumerate(self.pending):
-            print(f"\n  Click {i + 1} of {total} at ({click.x}, {click.y})")
+        reviewed: list[ProcessedClick | None] = [None] * total
+        idx = 0
+
+        while 0 <= idx < total:
+            click = self.pending[idx]
+            existing = reviewed[idx]
+            print(f"\n  Click {idx + 1} of {total} at ({click.x}, {click.y})")
+
             result = _show_crop_dialog(
-                click.screenshot, click.x, click.y,
+                click.screenshot,
+                click.x,
+                click.y,
                 step_index=len(self.steps),
+                click_number=idx + 1,
+                total_clicks=total,
+                existing=existing,
             )
+
             if result is None:
-                print("    Skipped.")
-                continue
+                print("  Processing cancelled.")
+                break
 
             action, name, command, text, enter, cropped_img = result
 
-            if action == "skip":
-                print("    Skipped (not saved).")
+            if action == "prev":
+                idx = max(0, idx - 1)
                 continue
 
-            filename = f"{name}.png"
+            if action == "next":
+                idx = min(total, idx + 1)
+                continue
+
+            if action == "skip":
+                reviewed[idx] = ProcessedClick(action="skip")
+                print("    Marked as skipped.")
+                idx += 1
+                continue
+
+            if action == "save":
+                reviewed[idx] = ProcessedClick(
+                    action="save",
+                    name=name,
+                    command=command,
+                    text=text if command == "click_and_type" else None,
+                    enter=enter,
+                    cropped=cropped_img,
+                )
+                print(f"    Marked for save: button={name}.png, command={command}")
+                idx += 1
+                continue
+
+        # Commit reviewed decisions in order after navigation is complete.
+        added_steps = 0
+        for item in reviewed:
+            if item is None or item.action != "save" or not item.name or item.cropped is None:
+                continue
+
+            filename = f"{item.name}.png"
             img_path = os.path.join(self.buttons_dir, filename)
-            cropped_img.save(img_path)
+            item.cropped.save(img_path)
             print(f"    Saved: {img_path}")
+
             step = CapturedStep(
                 button=filename,
-                command=command,
-                text=text if command == "click_and_type" else None,
-                enter=enter,
+                command=item.command,
+                text=item.text,
+                enter=item.enter,
             )
             self.steps.append(step)
-            print(f"    Step added: button={filename}, command={command}")
+            added_steps += 1
+            print(f"    Step added: button={filename}, command={item.command}")
+
+        if added_steps:
+            self._needs_save = True
 
         self.pending.clear()
         self._busy = False
 
-        # Save YAML immediately after processing
-        self._save_yaml()
+        # Save YAML immediately after processing when new steps were added
+        if self._needs_save:
+            self._save_yaml()
 
         # Ask the user if they want to quit
         if self._ask_quit():
@@ -310,6 +371,7 @@ class CaptureSession:
 
         print(f"\nYAML config saved: {yaml_path}")
         print(f"  {len(self.steps)} step(s) total.")
+        self._needs_save = False
 
 
 # ---------------------------------------------------------------------------
@@ -322,11 +384,14 @@ def _show_crop_dialog(
     click_x: int,
     click_y: int,
     step_index: int = 0,
+    click_number: int = 1,
+    total_clicks: int = 1,
+    existing: ProcessedClick | None = None,
 ) -> tuple[str, str | None, str | None, bool, Image.Image] | None:
     """Show the crop dialog on the main thread.
 
     Returns (action, name, command, text, enter, cropped_image) or None if cancelled.
-    action is "save" or "delete" (delete = remove last step, then save this one).
+    action is one of: "save", "skip", "prev", "next".
     """
     left = max(0, click_x - ZOOM_HALF)
     top = max(0, click_y - ZOOM_HALF)
@@ -389,12 +454,14 @@ def _show_crop_dialog(
     frame.pack(pady=10, padx=10)
 
     tk.Label(frame, text="Button name:").grid(row=0, column=0, sticky="w")
-    name_var = tk.StringVar()
+    default_name = existing.name if existing and existing.name else ""
+    name_var = tk.StringVar(value=default_name)
     name_entry = tk.Entry(frame, textvariable=name_var, width=30)
     name_entry.grid(row=0, column=1, padx=5)
 
     tk.Label(frame, text="Command:").grid(row=1, column=0, sticky="w")
-    command_var = tk.StringVar(value="click")
+    default_command = existing.command if existing and existing.action == "save" else "click"
+    command_var = tk.StringVar(value=default_command)
     tk.OptionMenu(
         frame,
         command_var,
@@ -403,13 +470,15 @@ def _show_crop_dialog(
         "wait_appear",
         "wait_disappear",
         "click_and_type",
+        "click_if_exists",
     ).grid(row=1, column=1, padx=5, sticky="w")
 
     tk.Label(frame, text="Text (for click_and_type):").grid(row=2, column=0, sticky="w")
-    text_var = tk.StringVar()
+    default_text = existing.text if existing and existing.text else ""
+    text_var = tk.StringVar(value=default_text)
     tk.Entry(frame, textvariable=text_var, width=30).grid(row=2, column=1, padx=5)
 
-    enter_var = tk.BooleanVar(value=False)
+    enter_var = tk.BooleanVar(value=bool(existing.enter) if existing else False)
     tk.Checkbutton(frame, text="Press Enter after typing", variable=enter_var).grid(
         row=3, column=0, columnspan=2, sticky="w"
     )
@@ -418,6 +487,14 @@ def _show_crop_dialog(
     tk.Label(frame, text=f"Steps saved so far: {step_index}").grid(
         row=4, column=0, columnspan=2, sticky="w"
     )
+    tk.Label(frame, text=f"Reviewing click {click_number} / {total_clicks}").grid(
+        row=5, column=0, columnspan=2, sticky="w"
+    )
+
+    if existing and existing.action == "skip":
+        tk.Label(frame, text="This click is currently marked as skipped.").grid(
+            row=6, column=0, columnspan=2, sticky="w"
+        )
 
     result = {"value": None}
 
@@ -455,11 +532,31 @@ def _show_crop_dialog(
         result["value"] = ("skip", None, None, None, None, None)
         root.destroy()
 
+    def on_prev():
+        result["value"] = ("prev", None, None, None, None, None)
+        root.destroy()
+
+    def on_next():
+        if existing is None:
+            messagebox.showinfo(
+                "Choose action",
+                "Please save or skip this click before moving to the next one.",
+            )
+            return
+        result["value"] = ("next", None, None, None, None, None)
+        root.destroy()
+
     def on_cancel():
         root.destroy()
 
     btn_frame = tk.Frame(root)
     btn_frame.pack(pady=5)
+    tk.Button(btn_frame, text="Previous", command=on_prev, width=10).pack(
+        side="left", padx=5
+    )
+    tk.Button(btn_frame, text="Next", command=on_next, width=10).pack(
+        side="left", padx=5
+    )
     tk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Skip this step", command=on_skip, width=14).pack(
         side="left", padx=5
@@ -573,6 +670,8 @@ def run_capture() -> int:
         steps=session_steps,
     )
 
+    start_recording = True
+
     if run_existing_steps and session_steps:
         print("\nRunning existing steps before recording...")
         try:
@@ -588,6 +687,20 @@ def run_capture() -> int:
         except Exception as e:
             print(f"Could not run existing steps: {e}")
             print("Starting recording mode anyway.")
+
+        confirm_root = tk.Tk()
+        confirm_root.withdraw()
+        confirm_root.attributes("-topmost", True)
+        start_recording = messagebox.askyesno(
+            "Start recording?",
+            "Existing steps are done. Start recording new steps now?",
+            parent=confirm_root,
+        )
+        confirm_root.destroy()
+
+        if not start_recording:
+            print("Recording skipped by user. Exiting capture mode.")
+            return 0
 
     session.start()
     return 0

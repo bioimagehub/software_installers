@@ -30,6 +30,9 @@ screen. For each click:
 5. The cropped image is saved to `<outdir>/buttons/<name>.png`.
 6. A step is appended to the YAML config.
 
+During click processing, you can move between recorded clicks with `Previous`
+and `Next`, and change a previously skipped click before final save.
+
 When you're done, the config is written to `<outdir>/config.yaml`.
 
 If `<outdir>/config.yaml` already exists, capture mode asks whether to:
@@ -120,6 +123,10 @@ Find an image on screen and perform an action on it.
 | `wait_appear` | Wait until the button image appears on screen |
 | `wait_disappear` | Wait until the button image is no longer on screen |
 | `click_and_type` | Click the button, then type `text` into the focused field |
+| `click_if_exists` | Click the button only if it exists; otherwise do nothing and continue |
+| `close_all` | Send WM_CLOSE to every visible matching window |
+
+> `close_all` does not fail if no matching windows are found within the timeout.
 
 #### Extra keys for `click_and_type`
 
@@ -137,7 +144,16 @@ Example:
   enter: true
 ```
 
-### 2. Wait step
+### 2. Type step
+
+Type text into the currently focused field without first clicking a button.
+
+```yaml
+- type: 'notepad'
+  enter: true
+```
+
+### 3. Wait step
 
 Pause execution for a fixed duration.
 
@@ -145,7 +161,7 @@ Pause execution for a fixed duration.
 - wait: 5s
 ```
 
-### 3. Repeat step (loop)
+### 4. Repeat step (loop)
 
 Jump back to an earlier step and run a number of iterations.
 
@@ -197,9 +213,7 @@ steps:
     timeout: 1m
   - button: 'start.png'
     timeout: 1m
-  - button: 'search.png'
-    command: click_and_type        # click search.png, type text, press Enter
-    text: 'ollama run glm-5.2:cloud'
+  - type: 'notepad'                # type text into the focused input
     enter: true
   - repeat:
       from: 2                      # jump back to step 2 (the wait)

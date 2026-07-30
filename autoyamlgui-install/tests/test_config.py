@@ -6,9 +6,11 @@ from pydantic import ValidationError
 from autoyamlgui.config import (
     ButtonStep,
     Command,
+    CommandStep,
     Defaults,
     RepeatStep,
     WaitStep,
+    WindowStep,
     parse_duration,
     parse_step,
 )
@@ -137,6 +139,28 @@ class TestWaitStep:
 # ---------------------------------------------------------------------------
 
 
+class TestWindowStep:
+    def test_window_pattern(self):
+        step = WindowStep(window="* - Etomo", timeout="10s")
+        assert step.window == "* - Etomo"
+        assert step.timeout == 10.0
+        assert step.action == "focus"
+
+    def test_window_action(self):
+        step = WindowStep(window="* - Etomo", timeout="10s", action="minimize")
+        assert step.action == "minimize"
+
+    def test_window_action_close_all(self):
+        step = WindowStep(window="* - Etomo", timeout="10s", action="close_all")
+        assert step.action == "close_all"
+
+
+class TestCommandStep:
+    def test_command(self):
+        step = CommandStep(cmd="start_program.exe")
+        assert step.cmd == "start_program.exe"
+
+
 class TestRepeatStep:
     def test_basic(self):
         step = RepeatStep(repeat={"from": 2, "times": 3})
@@ -189,6 +213,23 @@ class TestParseStep:
         step = parse_step({"repeat": {"from": 2, "times": 3}}, defaults)
         assert isinstance(step, RepeatStep)
         assert step.from_step == 2
+
+    def test_parse_window_step(self):
+        defaults = Defaults()
+        step = parse_step({"window": "* - Etomo"}, defaults)
+        assert isinstance(step, WindowStep)
+        assert step.window == "* - Etomo"
+
+    def test_parse_command_step(self):
+        defaults = Defaults()
+        step = parse_step({"cmd": "start_program.exe"}, defaults)
+        assert isinstance(step, CommandStep)
+        assert step.cmd == "start_program.exe"
+
+    def test_parse_type_step(self):
+        defaults = Defaults()
+        step = parse_step({"type": "notepad"}, defaults)
+        assert step.type == "notepad"
 
     def test_parse_unknown_step(self):
         defaults = Defaults()

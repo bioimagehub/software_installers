@@ -10,11 +10,13 @@ import yaml
 
 from .config import (
     ButtonStep,
+    CommandStep,
     Config,
     Defaults,
     Environment,
     RepeatStep,
     WaitStep,
+    WindowStep,
     parse_step,
 )
 
@@ -26,7 +28,7 @@ class ParsedConfig:
     name: str | None
     environment: Environment
     defaults: Defaults
-    steps: List[Union[ButtonStep, WaitStep, RepeatStep]]
+    steps: List[Union[ButtonStep, WaitStep, WindowStep, CommandStep, RepeatStep]]
 
 
 def load_config(path: str) -> ParsedConfig:
@@ -56,19 +58,13 @@ def load_config(path: str) -> ParsedConfig:
     config = Config(**raw)
 
     # Parse each step and apply defaults
-    parsed_steps: list[ButtonStep | WaitStep | RepeatStep] = []
+    parsed_steps: list[ButtonStep | WaitStep | WindowStep | CommandStep | RepeatStep] = []
     for i, raw_step in enumerate(config.steps):
         try:
             step = parse_step(raw_step, config.defaults)
         except Exception as e:
             raise ValueError(f"Error in step {i + 1}: {e}") from e
         parsed_steps.append(step)
-
-    # Resolve button image paths to absolute paths
-    buttonpath = config.environment.buttonpath
-    for step in parsed_steps:
-        if isinstance(step, ButtonStep):
-            step.button = os.path.join(buttonpath, step.button)
 
     return ParsedConfig(
         name=config.name,

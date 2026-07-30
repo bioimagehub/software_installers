@@ -7,8 +7,13 @@ found, to avoid hover effects interfering with subsequent screenshots.
 
 from __future__ import annotations
 
+import fnmatch
+import glob
 import logging
 import os
+import re
+import subprocess
+import sys
 import time
 from typing import Tuple
 
@@ -101,8 +106,43 @@ def find_button(image_path: str, confidence: float = 0.8) -> Tuple[int, int] | N
         )
         return None
 
+    template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    template_std = float(np.std(template_gray))
+
+    # Low-variance templates are prone to false positives with CCOEFF_NORMED,
+    # so use SQDIFF_NORMED where lower is better.
+    if template_std < 10.0:
+        result = cv2.matchTemplate(screen, template, cv2.TM_SQDIFF_NORMED)
+        min_val, _max_val, min_loc, _max_loc = cv2.minMaxLoc(result)
+        sqdiff_threshold = max(0.01, 1.0 - confidence)
+        if min_val <= sqdiff_threshold:
+            cx = int(min_loc[0] + tw / 2)
+            cy = int(min_loc[1] + th / 2)
+            origin_x, origin_y = _virtual_desktop_origin()
+            vx = cx + origin_x
+            vy = cy + origin_y
+            logger.debug(
+                "Found %s at image (%d, %d) -> virtual (%d, %d) with sqdiff %.3f <= %.3f (low-variance template)",
+                os.path.basename(image_path),
+                cx,
+                cy,
+                vx,
+                vy,
+                min_val,
+                sqdiff_threshold,
+            )
+            return (vx, vy)
+
+        logger.debug(
+            "Did not find %s (best sqdiff %.3f > %.3f, low-variance template)",
+            os.path.basename(image_path),
+            min_val,
+            sqdiff_threshold,
+        )
+        return None
+
     result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+    _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(result)
 
     if max_val >= confidence:
         cx = int(max_loc[0] + tw / 2)
@@ -146,8 +186,57 @@ def park_mouse() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _enumerate_button_candidates(button: str, buttonpath: str) -> list[str]:
+    """Return candidate image paths for a button reference in the buttonpath."""
+    if os.path.isabs(button):
+        return [button] if os.path.isfile(button) else []
+
+    if os.path.dirname(button):
+        candidate = os.path.normpath(os.path.join(buttonpath, button))
+        return [candidate] if os.path.isfile(candidate) else []
+
+    candidates: list[str] = []
+    base, _ext = os.path.splitext(button)
+    try:
+        entries = sorted(os.listdir(buttonpath))
+    except FileNotFoundError:
+        return []
+
+    for entry in entries:
+        full_path = os.path.join(buttonpath, entry)
+        if not os.path.isfile(full_path):
+            continue
+
+        entry_base, _entry_ext = os.path.splitext(entry)
+        if entry_base == base or re.fullmatch(rf"{re.escape(base)}(_\d+)?", entry_base):
+            candidates.append(full_path)
+
+    if not candidates and any(char in button for char in "*?["):
+        candidates = sorted(glob.glob(os.path.join(buttonpath, button)))
+
+    return candidates
+
+
+def _find_button(button: str, buttonpath: str, confidence: float = 0.8) -> tuple[str, tuple[int, int]] | tuple[None, None]:
+    """Search for a button image using one or more candidate files."""
+    candidates = _enumerate_button_candidates(button, buttonpath)
+    if not candidates:
+        # Fallback: try the literal button path under buttonpath
+        literal = os.path.join(buttonpath, button)
+        if os.path.isfile(literal):
+            candidates = [literal]
+
+    for candidate in candidates:
+        pos = find_button(candidate, confidence)
+        if pos is not None:
+            return candidate, pos
+
+    return None, None
+
+
 def click_button(
-    image_path: str,
+    button: str,
+    buttonpath: str,
     confidence: float = 0.8,
     timeout: float = float("inf"),
 ) -> bool:
@@ -164,11 +253,9 @@ def click_button(
     deadline = time.monotonic() + timeout if timeout != float("inf") else None
 
     while True:
-        pos = find_button(image_path, confidence)
+        image_path, pos = _find_button(button, buttonpath, confidence)
         if pos is not None:
             print(f"Found {os.path.basename(image_path)} at ({pos[0]}, {pos[1]})")
-            # With DPI awareness set in __init__.py, pyautogui uses
-            # physical pixel coordinates that match mss/find_button directly.
             pyautogui.click(pos[0], pos[1])
             park_mouse()
             logger.info("Clicked: %s", os.path.basename(image_path))
@@ -179,15 +266,37 @@ def click_button(
 
         if deadline is not None and time.monotonic() >= deadline:
             logger.warning(
-                "Timed out waiting to click: %s", os.path.basename(image_path)
+                "Timed out waiting to click: %s", button
             )
             return False
 
         time.sleep(POLL_INTERVAL)
 
 
+def click_if_exists(
+    button: str,
+    buttonpath: str,
+    confidence: float = 0.8,
+) -> bool:
+    """Click a button only if it exists on screen.
+
+    If the button is not found, do nothing and continue.
+    """
+    image_path, pos = _find_button(button, buttonpath, confidence)
+    if pos is None:
+        logger.info("Button not found, skipping: %s", button)
+        return True
+
+    print(f"Found {os.path.basename(image_path)} at ({pos[0]}, {pos[1]})")
+    pyautogui.click(pos[0], pos[1])
+    park_mouse()
+    logger.info("Clicked existing: %s", os.path.basename(image_path))
+    return True
+
+
 def click_double_button(
-    image_path: str,
+    button: str,
+    buttonpath: str,
     confidence: float = 0.8,
     timeout: float = float("inf"),
 ) -> bool:
@@ -204,11 +313,9 @@ def click_double_button(
     deadline = time.monotonic() + timeout if timeout != float("inf") else None
 
     while True:
-        pos = find_button(image_path, confidence)
+        image_path, pos = _find_button(button, buttonpath, confidence)
         if pos is not None:
             print(f"Found {os.path.basename(image_path)} at ({pos[0]}, {pos[1]})")
-            # With DPI awareness set in __init__.py, pyautogui uses
-            # physical pixel coordinates that match mss/find_button directly.
             pyautogui.click(pos[0], pos[1], clicks=2, interval=0.1)
             park_mouse()
             logger.info("Double-clicked: %s", os.path.basename(image_path))
@@ -219,7 +326,7 @@ def click_double_button(
 
         if deadline is not None and time.monotonic() >= deadline:
             logger.warning(
-                "Timed out waiting to double-click: %s", os.path.basename(image_path)
+                "Timed out waiting to double-click: %s", button
             )
             return False
 
@@ -227,11 +334,14 @@ def click_double_button(
 
 
 def wait_appear(
-    image_path: str,
+    button: str,
+    buttonpath: str,
     confidence: float = 0.8,
     timeout: float = float("inf"),
 ) -> bool:
     """Wait until a button image appears on screen.
+
+    This wait mode must not move the mouse; it only polls screenshots.
 
     Returns:
         True if the button appeared, False on timeout.
@@ -239,26 +349,216 @@ def wait_appear(
     deadline = time.monotonic() + timeout if timeout != float("inf") else None
 
     while True:
-        pos = find_button(image_path, confidence)
+        image_path, pos = _find_button(button, buttonpath, confidence)
         if pos is not None:
             logger.info("Appeared: %s", os.path.basename(image_path))
             return True
 
         if deadline is not None and time.monotonic() >= deadline:
             logger.warning(
-                "Timed out waiting to appear: %s", os.path.basename(image_path)
+                "Timed out waiting to appear: %s", button
             )
             return False
 
         time.sleep(POLL_INTERVAL)
 
 
+def _get_window_titles() -> list[str]:
+    """Return the titles of currently visible windows on Windows."""
+    if os.name != "nt":
+        return []
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return []
+
+    user32 = ctypes.windll.user32
+
+    titles: list[str] = []
+
+    def enum_windows_callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value.strip()
+        if title:
+            titles.append(title)
+        return True
+
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    cb = callback_type(enum_windows_callback)
+    user32.EnumWindows(cb, 0)
+    return titles
+
+
+def run_command(command: str, background: bool = False) -> bool:
+    """Run a shell command and return True when it exits successfully.
+
+    If background is True, the command is started and the function returns
+    immediately without waiting for process termination.
+    """
+    logger.info("Running command: %s (background=%s)", command, background)
+
+    if background:
+        try:
+            subprocess.Popen(command, shell=True)
+            return True
+        except Exception as exc:
+            logger.error("Command failed to start: %s", exc)
+            return False
+
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        logger.error("Command failed: %s", exc)
+        return False
+
+    if completed.stdout:
+        print(completed.stdout.strip())
+    if completed.stderr:
+        print(completed.stderr.strip(), file=sys.stderr)
+
+    if completed.returncode != 0:
+        logger.error("Command exited with code %d: %s", completed.returncode, command)
+        return False
+
+    return True
+
+
+def _perform_window_action(title: str, action: str) -> None:
+    """Perform an action on a matching window on Windows."""
+    if os.name != "nt":
+        return
+
+    try:
+        import ctypes
+    except ImportError:
+        return
+
+    user32 = ctypes.windll.user32
+
+    def enum_windows_callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if buf.value.strip() == title:
+            if action == "focus":
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+            elif action == "minimize":
+                user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            elif action == "close":
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            return False
+        return True
+
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    cb = callback_type(enum_windows_callback)
+    user32.EnumWindows(cb, 0)
+
+
+def _close_matching_windows(pattern: str) -> bool:
+    """Close every visible window whose title matches the given pattern."""
+    if os.name != "nt":
+        return False
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return False
+
+    user32 = ctypes.windll.user32
+    closed = 0
+
+    def callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value.strip()
+        if title and fnmatch.fnmatchcase(title.lower(), pattern.lower()):
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            nonlocal closed
+            closed += 1
+        return True
+
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    cb = callback_type(callback)
+    user32.EnumWindows(cb, 0)
+
+    if closed:
+        logger.info("Closed %d matching windows: %s", closed, pattern)
+        return True
+    return False
+
+
+def wait_for_window(pattern: str, timeout: float = float("inf"), action: str = "focus") -> bool:
+    """Wait until a window title matches the given wildcard pattern.
+
+    Supports the same patterns as Python's fnmatch, including ``*`` for any
+    sequence of characters. When a match is found, the window may be acted
+    on according to the configured action.
+    """
+    deadline = time.monotonic() + timeout if timeout != float("inf") else None
+
+    while True:
+        titles = _get_window_titles()
+        for title in titles:
+            if fnmatch.fnmatchcase(title.lower(), pattern.lower()):
+                logger.info("Found matching window title: %s", title)
+                if action == "close_all":
+                    return _close_matching_windows(pattern)
+                _perform_window_action(title, action)
+                return True
+
+        if deadline is not None and time.monotonic() >= deadline:
+            if action == "close_all":
+                logger.info(
+                    "No matching windows found for pattern %s; continuing without error.",
+                    pattern,
+                )
+                return True
+            logger.warning("Timed out waiting for window matching pattern: %s", pattern)
+            return False
+
+        time.sleep(POLL_INTERVAL)
+
+
 def wait_disappear(
-    image_path: str,
+    button: str,
+    buttonpath: str,
     confidence: float = 0.8,
     timeout: float = float("inf"),
 ) -> bool:
     """Wait until a button image is no longer on screen.
+
+    This wait mode must not move the mouse; it only polls screenshots.
 
     Returns:
         True if the button disappeared, False on timeout.
@@ -266,17 +566,14 @@ def wait_disappear(
     deadline = time.monotonic() + timeout if timeout != float("inf") else None
 
     while True:
-        pos = find_button(image_path, confidence)
+        image_path, pos = _find_button(button, buttonpath, confidence)
         if pos is None:
-            logger.info("Disappeared: %s", os.path.basename(image_path))
+            logger.info("Disappeared: %s", button)
             return True
-
-        # Still visible — park mouse to avoid hover effects
-        park_mouse()
 
         if deadline is not None and time.monotonic() >= deadline:
             logger.warning(
-                "Timed out waiting to disappear: %s", os.path.basename(image_path)
+                "Timed out waiting to disappear: %s", button
             )
             return False
 
@@ -284,7 +581,8 @@ def wait_disappear(
 
 
 def click_and_type(
-    image_path: str,
+    button: str,
+    buttonpath: str,
     text: str,
     enter: bool = False,
     confidence: float = 0.8,
@@ -295,7 +593,7 @@ def click_and_type(
     Returns:
         True if the button was found and text typed, False on timeout.
     """
-    if not click_button(image_path, confidence, timeout):
+    if not click_button(button, buttonpath, confidence, timeout):
         return False
 
     pyautogui.write(text)
@@ -306,4 +604,16 @@ def click_and_type(
         logger.info("Pressed Enter")
 
     park_mouse()
+    return True
+
+
+def type_text(text: str, enter: bool = False) -> bool:
+    """Type text into the currently focused field."""
+    pyautogui.write(text)
+    logger.info("Typed: %s", text)
+
+    if enter:
+        pyautogui.press("enter")
+        logger.info("Pressed Enter")
+
     return True

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autoyamlgui.config import ButtonStep, Command, RepeatStep, WaitStep
+from autoyamlgui.config import ButtonStep, Command, CommandStep, RepeatStep, TypeStep, WaitStep, WindowStep
 from autoyamlgui.loader import ParsedConfig
 from autoyamlgui.runner import Runner
 
@@ -79,9 +79,84 @@ class TestRunnerDispatch:
         runner = Runner(config)
         assert runner.run() is True
         mock_automation.click_and_type.assert_called_once()
-        call_kwargs = mock_automation.click_and_type.call_args
-        assert call_kwargs[0][1] == "hello"  # text arg
-        assert call_kwargs[0][2] is True  # enter arg
+        call_args = mock_automation.click_and_type.call_args[0]
+        assert call_args[0] == "/tmp/search.png"
+        assert call_args[1] == "/tmp"
+        assert call_args[2] == "hello"
+        assert call_args[3] is True
+
+    @patch("autoyamlgui.runner.automation")
+    def test_click_if_exists_step(self, mock_automation):
+        mock_automation.click_if_exists.return_value = True
+        step = ButtonStep(button="/tmp/optional.png", command=Command.click_if_exists)
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.click_if_exists.assert_called_once_with(
+            "/tmp/optional.png",
+            "/tmp",
+            0.8,
+        )
+
+    @patch("autoyamlgui.runner.automation")
+    def test_window_step(self, mock_automation):
+        mock_automation.wait_for_window.return_value = True
+        step = WindowStep(window="* - Etomo", timeout="5s")
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.wait_for_window.assert_called_once_with("* - Etomo", 5.0, "focus")
+
+    @patch("autoyamlgui.runner.automation")
+    def test_window_step_minimize(self, mock_automation):
+        mock_automation.wait_for_window.return_value = True
+        step = WindowStep(window="* - Etomo", timeout="5s", action="minimize")
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.wait_for_window.assert_called_once_with("* - Etomo", 5.0, "minimize")
+
+    @patch("autoyamlgui.runner.automation")
+    def test_window_step_close_all(self, mock_automation):
+        mock_automation.wait_for_window.return_value = True
+        step = WindowStep(window="* - Etomo", timeout="5s", action="close_all")
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.wait_for_window.assert_called_once_with("* - Etomo", 5.0, "close_all")
+
+    @patch("autoyamlgui.runner.automation")
+    def test_command_step(self, mock_automation):
+        mock_automation.run_command.return_value = True
+        step = CommandStep(cmd="start_program.exe")
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.run_command.assert_called_once_with(
+            "start_program.exe",
+            background=False,
+        )
+
+    @patch("autoyamlgui.runner.automation")
+    def test_command_step_background(self, mock_automation):
+        mock_automation.run_command.return_value = True
+        step = CommandStep(cmd="start_program.exe", background=True)
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.run_command.assert_called_once_with(
+            "start_program.exe",
+            background=True,
+        )
+
+    @patch("autoyamlgui.runner.automation")
+    def test_type_step(self, mock_automation):
+        mock_automation.type_text.return_value = True
+        step = TypeStep(type="notepad", enter=True)
+        config = make_config([step])
+        runner = Runner(config)
+        assert runner.run() is True
+        mock_automation.type_text.assert_called_once_with("notepad", True)
 
     @patch("autoyamlgui.runner.automation")
     def test_failed_step_aborts(self, mock_automation):

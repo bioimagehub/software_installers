@@ -61,6 +61,7 @@ class Command(str, Enum):
     wait_appear = "wait_appear"
     wait_disappear = "wait_disappear"
     click_and_type = "click_and_type"
+    click_if_exists = "click_if_exists"
 
 
 class ButtonStep(BaseModel):
@@ -104,6 +105,44 @@ class WaitStep(BaseModel):
         return parse_duration(v)
 
 
+class WindowStep(BaseModel):
+    """Wait until a window title matches a pattern, then optionally act on it."""
+
+    window: str = Field(..., description="Window title pattern (supports * wildcard)")
+    timeout: float = Field(default=float("inf"), description="Max wait time")
+    action: Literal["focus", "minimize", "close", "close_all"] = Field(
+        default="focus",
+        description="Action to perform when the window appears",
+    )
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def validate_timeout(cls, v):
+        if v is None:
+            return float("inf")
+        return parse_duration(v)
+
+
+class TypeStep(BaseModel):
+    """Type text into the currently focused field."""
+
+    type: str = Field(..., description="Text to type into the focused input")
+    enter: bool = Field(
+        default=False,
+        description="Press Enter after typing",
+    )
+
+
+class CommandStep(BaseModel):
+    """Execute a shell command."""
+
+    cmd: str = Field(..., description="Shell command to run")
+    background: bool = Field(
+        default=False,
+        description="Run the command without waiting for it to exit (useful for GUI apps)",
+    )
+
+
 class RepeatStep(BaseModel):
     """Jump back to an earlier step and run a number of iterations."""
 
@@ -139,7 +178,7 @@ class RepeatStep(BaseModel):
 
 # Discriminated union: detect step type by which key is present
 Step = Annotated[
-    Union[ButtonStep, WaitStep, RepeatStep],
+    Union[ButtonStep, WaitStep, WindowStep, TypeStep, CommandStep, RepeatStep],
     Field(discriminator=None),
 ]
 
@@ -197,7 +236,7 @@ class Config(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def parse_step(raw: dict, defaults: Defaults) -> ButtonStep | WaitStep | RepeatStep:
+def parse_step(raw: dict, defaults: Defaults) -> ButtonStep | WaitStep | WindowStep | CommandStep | RepeatStep:
     """Parse a raw step dict into the appropriate step model, applying defaults."""
     if "button" in raw:
         step = ButtonStep(**raw)
@@ -209,10 +248,16 @@ def parse_step(raw: dict, defaults: Defaults) -> ButtonStep | WaitStep | RepeatS
         return step
     elif "wait" in raw:
         return WaitStep(**raw)
+    elif "window" in raw:
+        return WindowStep(**raw)
+    elif "type" in raw:
+        return TypeStep(**raw)
+    elif "cmd" in raw:
+        return CommandStep(**raw)
     elif "repeat" in raw:
         return RepeatStep(**raw)
     else:
         raise ValueError(
             f"Unrecognized step: {raw}. "
-            "Expected one of: 'button', 'wait', 'repeat'."
+            "Expected one of: 'button', 'wait', 'window', 'cmd', 'repeat'."
         )

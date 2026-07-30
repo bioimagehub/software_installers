@@ -6,7 +6,7 @@ import logging
 import time
 
 from . import automation
-from .config import ButtonStep, Command, RepeatStep, WaitStep
+from .config import ButtonStep, Command, CommandStep, RepeatStep, TypeStep, WaitStep, WindowStep
 from .loader import ParsedConfig
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,29 @@ class Runner:
                 time.sleep(step.wait)
                 self.index += 1
 
+            elif isinstance(step, WindowStep):
+                ok = self._run_window_step(step_num, step)
+                if not ok:
+                    logger.error("Step %d failed, aborting.", step_num)
+                    return False
+                self.index += 1
+
+            elif isinstance(step, TypeStep):
+                ok = self._run_type_step(step_num, step)
+                if not ok:
+                    logger.error("Step %d failed, aborting.", step_num)
+                    return False
+                self.index += 1
+
             elif isinstance(step, ButtonStep):
                 ok = self._run_button_step(step_num, step)
+                if not ok:
+                    logger.error("Step %d failed, aborting.", step_num)
+                    return False
+                self.index += 1
+
+            elif isinstance(step, CommandStep):
+                ok = self._run_command_step(step_num, step)
                 if not ok:
                     logger.error("Step %d failed, aborting.", step_num)
                     return False
@@ -62,6 +83,32 @@ class Runner:
     # Button step
     # -------------------------------------------------------------------
 
+    def _run_window_step(self, step_num: int, step: WindowStep) -> bool:
+        """Execute a window step and return True on success."""
+        logger.info(
+            "Step %d: window — %s (timeout=%.1fs, action=%s)",
+            step_num,
+            step.window,
+            step.timeout,
+            step.action,
+        )
+        return automation.wait_for_window(step.window, step.timeout, step.action)
+
+    def _run_command_step(self, step_num: int, step: CommandStep) -> bool:
+        """Execute a shell command step and return True on success."""
+        logger.info(
+            "Step %d: cmd — %s (background=%s)",
+            step_num,
+            step.cmd,
+            step.background,
+        )
+        return automation.run_command(step.cmd, background=step.background)
+
+    def _run_type_step(self, step_num: int, step: TypeStep) -> bool:
+        """Execute a typing-only step and return True on success."""
+        logger.info("Step %d: type — %r (enter=%s)", step_num, step.type, step.enter)
+        return automation.type_text(step.type, step.enter)
+
     def _run_button_step(self, step_num: int, step: ButtonStep) -> bool:
         """Execute a button step and return True on success."""
         cmd = step.command
@@ -74,29 +121,50 @@ class Runner:
             step.confidence or 0.8,
         )
 
+        buttonpath = self.config.environment.buttonpath
+
         if cmd == Command.click:
             return automation.click_button(
-                step.button, step.confidence or 0.8, step.timeout
+                step.button,
+                buttonpath,
+                step.confidence or 0.8,
+                step.timeout,
             )
         elif cmd == Command.click_double:
             return automation.click_double_button(
-                step.button, step.confidence or 0.8, step.timeout
+                step.button,
+                buttonpath,
+                step.confidence or 0.8,
+                step.timeout,
             )
         elif cmd == Command.wait_appear:
             return automation.wait_appear(
-                step.button, step.confidence or 0.8, step.timeout
+                step.button,
+                buttonpath,
+                step.confidence or 0.8,
+                step.timeout,
             )
         elif cmd == Command.wait_disappear:
             return automation.wait_disappear(
-                step.button, step.confidence or 0.8, step.timeout
+                step.button,
+                buttonpath,
+                step.confidence or 0.8,
+                step.timeout,
             )
         elif cmd == Command.click_and_type:
             return automation.click_and_type(
                 step.button,
+                buttonpath,
                 step.text or "",
                 step.enter,
                 step.confidence or 0.8,
                 step.timeout,
+            )
+        elif cmd == Command.click_if_exists:
+            return automation.click_if_exists(
+                step.button,
+                buttonpath,
+                step.confidence or 0.8,
             )
         else:
             logger.error("Unknown command: %s", cmd)
