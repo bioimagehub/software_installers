@@ -3,8 +3,13 @@ defaults:
   timeout: inf
   confidence: 0.8
 environment:
-  buttonpath: D:/BIPHUB-Oeyvind/test_gui\buttons
+  buttonpath: D:/BIPHUB-Oeyvind/git/software_installers/autoyamlgui-install/examples/autoetomo/buttons
 
+variables:
+  source: file
+  path: "C:/Users/radiumu1/Desktop/etomo_input.txt"
+  format: lines
+  name: item
 
 steps:
 # 0 ) Close all Etomo windows if they are open
@@ -14,7 +19,7 @@ steps:
 
 # Start etomo
 # 1) Launch a standard Windows program from the command line
-- cmd: 'cd C:\Program Files\IMOD\bin'
+- cmd: 'cd C:/Program Files/IMOD/bin'
 - cmd: 'etomo.jar'
   background: true
 
@@ -25,41 +30,51 @@ steps:
 
 # 3) Click on the "Montage" option
 - button: select_montage
+  window: 'Starting Serial Sections'
 
 # 3.1 Select file 
 - button: browse
-# - button: file_path
-#   command: click_and_type
-#   text: "D:/BIPHUB-Oeyvind/test_gui/test_AB/AB-768-3-2023-2-E4-1_2x2.mrc" # TODO: make this a variable and accept txt files as input
-# - button: open_file
-# - button: OK_fileselector
+  window: 'Starting Serial Sections'
+
+- button: file_path
+  command: click_and_type
+  text: "{{ item }}"
+  window: 'Stack'
+
+- button: open_file
+  window: 'Stack'
+
+- button: OK_fileselector
+  window: 'Starting Serial Sections'
 
 - window: '*Project Log' # Wait until the Project Log window appears, (when user have selected a file)
-  action: minimize
-
-- window: '*Project Log'
-  timeout: 10s
   action: minimize
 
 
 # 4) Wait for the user to select a Stack and press "OK" (until the "Starting Serial Sections Interface" window appears)
 - button: wait for starting serial sections interface.png
   command: wait_appear
+  window: '* - Etomo'
 
 # 5) Initial blend
 - button: select initial blend.png
   timeout: 2s # if wrong tab selected
+  window: '* - Etomo'
 
 - wait: 2s
 
 - button: use existing edge displacement file.png
   command: click_if_exists # this will unselect it
   timeout: 2s # if this is wrongly selected
-  confidence: 0.99
+  confidence: 1
+  window: '* - Etomo'
 
 - button: sloppy image.png
   timeout: 2s
+  window: '* - Etomo'
+
 - button: make blended stack.png
+  window: '* - Etomo'
 
 - button: blend_done.png
   command: wait_appear
@@ -71,20 +86,29 @@ steps:
 
 # 6) Alignment
 - button: align_tab.png
+  window: '* - Etomo'
 - button: initial auto alignment.png
+  window: '* - Etomo'
 - button: align_done.png
   command: wait_appear
+  window: '* - Etomo'
 
 - button: Refine with auto alignment.png
+  window: '* - Etomo'
 - button: align_done.png
   command: wait_appear
+  window: '* - Etomo'
+  
 
 
 # 7) Make stack
 - button: make_stack_tab.png
+  window: '* - Etomo'
 - wait: 1s
 - button: make_aligned_stack.png
+  window: '* - Etomo'
 - wait: 3s
 - button: align_done.png
   command: wait_appear
+  window: '* - Etomo'
 

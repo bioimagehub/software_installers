@@ -7,13 +7,16 @@ from autoyamlgui.config import (
     ButtonStep,
     Command,
     CommandStep,
+    Config,
     Defaults,
+    Environment,
     RepeatStep,
     WaitStep,
     WindowStep,
     parse_duration,
     parse_step,
 )
+from autoyamlgui.loader import load_config
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +204,81 @@ class TestParseStep:
         assert isinstance(step, ButtonStep)
         assert step.command == Command.click
         assert step.confidence == 0.8  # default applied
+
+    def test_config_accepts_variables_block(self):
+        config = Config(
+            name="test",
+            environment=Environment(buttonpath="/tmp"),
+            steps=[{"button": "start.png"}],
+            variables={
+                "source": "list",
+                "values": ["alpha", "beta"],
+            },
+        )
+        assert config.variables is not None
+        assert config.variables.source == "list"
+
+    def test_load_config_expands_from_file_variables(self, tmp_path):
+        values_file = tmp_path / "values.txt"
+        values_file.write_text("alpha\nbeta\n", encoding="utf-8")
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+name: test
+environment:
+  buttonpath: /tmp
+variables:
+  source: file
+  path: values.txt
+  format: lines
+steps:
+  - button: start.png
+    command: click_and_type
+    text: \"{{ item }}\"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        parsed = load_config(str(config_path))
+
+        assert len(parsed.variable_runs) == 2
+        assert parsed.variable_runs[0].context["item"] == "alpha"
+        assert parsed.variable_runs[1].context["item"] == "beta"
+        assert parsed.variable_runs[0].steps[0].text == "alpha"
+        assert parsed.variable_runs[1].steps[0].text == "beta"
+
+    def test_load_config_expands_from_file_variables_with_cp1252_encoding(self, tmp_path):
+        values_file = tmp_path / "values.txt"
+        values_file.write_bytes("café\nMüller\nL’ami\n".encode("cp1252"))
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+name: test
+environment:
+  buttonpath: /tmp
+variables:
+  source: file
+  path: values.txt
+  format: lines
+steps:
+  - button: start.png
+    command: click_and_type
+    text: \"{{ item }}\"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        parsed = load_config(str(config_path))
+
+        assert len(parsed.variable_runs) == 3
+        assert parsed.variable_runs[0].context["item"] == "café"
+        assert parsed.variable_runs[1].context["item"] == "Müller"
+        assert parsed.variable_runs[2].context["item"] == "L’ami"
+        assert parsed.variable_runs[0].steps[0].text == "café"
+        assert parsed.variable_runs[1].steps[0].text == "Müller"
+        assert parsed.variable_runs[2].steps[0].text == "L’ami"
 
     def test_parse_wait_step(self):
         defaults = Defaults()

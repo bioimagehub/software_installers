@@ -1,0 +1,1 @@
+D:\BIPHUB-Oeyvind\git\software_installers\autoyamlgui-install\autoyamlgui.bat D:\BIPHUB-Oeyvind\git\software_installers\autoyamlgui-install\configs\etomo_config.yaml

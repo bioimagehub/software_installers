@@ -7,7 +7,7 @@ import time
 
 from . import automation
 from .config import ButtonStep, Command, CommandStep, RepeatStep, TypeStep, WaitStep, WindowStep
-from .loader import ParsedConfig
+from .loader import ParsedConfig, VariableRun
 
 logger = logging.getLogger(__name__)
 
@@ -21,16 +21,37 @@ class Runner:
     def __init__(self, config: ParsedConfig):
         self.config = config
         self.index = 0
+        self._steps: list = []
         # Track active loops: list of (from_index_0based, remaining_iterations, delay)
         self._loop_stack: list[tuple[int, int, float]] = []
 
     def run(self) -> bool:
         """Execute all steps. Returns True if all succeeded, False on any failure."""
         name = self.config.name or "unnamed"
-        logger.info("Starting script: %s (%d steps)", name, len(self.config.steps))
+        runs = self.config.effective_runs
+        logger.info("Starting script: %s (%d run(s))", name, len(runs))
 
-        while self.index < len(self.config.steps):
-            step = self.config.steps[self.index]
+        for run_index, run in enumerate(runs, start=1):
+            logger.info("Run %d/%d", run_index, len(runs))
+            if run.context:
+                logger.info("Context: %s", dict(run.context))
+            ok = self._run_steps(run)
+            if not ok:
+                logger.error("Script '%s' aborted during run %d/%d.", name, run_index, len(runs))
+                return False
+
+        logger.info("Script '%s' completed successfully.", name)
+        return True
+
+    def _run_steps(self, run: VariableRun) -> bool:
+        """Execute a single expanded run."""
+        self._steps = run.steps
+        steps = run.steps
+        self.index = 0
+        self._loop_stack = []
+
+        while self.index < len(steps):
+            step = steps[self.index]
             step_num = self.index + 1  # 1-based for logging
 
             if isinstance(step, WaitStep):
@@ -76,7 +97,6 @@ class Runner:
             # Check if a loop needs to repeat
             self._check_loops()
 
-        logger.info("Script '%s' completed successfully.", name)
         return True
 
     # -------------------------------------------------------------------
@@ -120,6 +140,19 @@ class Runner:
             step.timeout,
             step.confidence or 0.8,
         )
+
+        if step.window:
+            window_timeout = step.window_timeout if step.window_timeout is not None else step.timeout
+            logger.info(
+                "Step %d: waiting for window %r before button action (timeout=%.1fs, action=%s)",
+                step_num,
+                step.window,
+                window_timeout,
+                step.window_action,
+            )
+            if not automation.wait_for_window(step.window, window_timeout, step.window_action):
+                logger.error("Step %d failed because the required window was not found.", step_num)
+                return False
 
         buttonpath = self.config.environment.buttonpath
 
@@ -178,12 +211,12 @@ class Runner:
         """Set up a loop: jump back to the target step index."""
         from_0based = step.from_step - 1  # convert 1-based to 0-based
 
-        if from_0based < 0 or from_0based >= len(self.config.steps):
+        if from_0based < 0 or from_0based >= len(self._steps):
             logger.error(
                 "Step %d: repeat.from=%d is out of range (1-%d)",
                 step_num,
                 step.from_step,
-                len(self.config.steps),
+                len(self._steps),
             )
             return
 
@@ -230,8 +263,8 @@ class Runner:
                 logger.info("Loop complete")
                 # Move past the repeat step
                 # Find the repeat step index and skip it
-                for i in range(target + 1, len(self.config.steps)):
-                    if isinstance(self.config.steps[i], RepeatStep):
+                for i in range(target + 1, len(self._steps)):
+                    if isinstance(self._steps[i], RepeatStep):
                         self.index = i + 1
                         return
-                self.index = len(self.config.steps)
+                self.index = len(self._steps)

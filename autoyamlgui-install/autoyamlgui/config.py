@@ -79,12 +79,31 @@ class ButtonStep(BaseModel):
     enter: bool = Field(
         default=False, description="Press Enter after typing (for click_and_type)"
     )
+    window: str | None = Field(
+        default=None,
+        description="Optional window title pattern to focus before executing the button action",
+    )
+    window_timeout: float | None = Field(
+        default=None,
+        description="Optional timeout for waiting for the window before the button action",
+    )
+    window_action: Literal["focus", "minimize", "close", "close_all"] = Field(
+        default="focus",
+        description="Action to perform on the window before the button action",
+    )
 
     @field_validator("timeout", mode="before")
     @classmethod
     def validate_timeout(cls, v):
         if v is None:
             return float("inf")
+        return parse_duration(v)
+
+    @field_validator("window_timeout", mode="before")
+    @classmethod
+    def validate_window_timeout(cls, v):
+        if v is None:
+            return None
         return parse_duration(v)
 
     @model_validator(mode="after")
@@ -215,6 +234,30 @@ class Environment(BaseModel):
     buttonpath: str = Field(..., description="Directory where button images are stored")
 
 
+class Variables(BaseModel):
+    """Optional variable expansion configuration for a YAML script."""
+
+    source: Literal["list", "file"] = Field(
+        default="list",
+        description="Where to read variable values from",
+    )
+    values: list[str] | None = Field(default=None, description="Inline values")
+    path: str | None = Field(default=None, description="Path to a file containing values")
+    format: Literal["lines"] = Field(
+        default="lines",
+        description="How to interpret values from a file",
+    )
+    name: str = Field(default="item", description="Variable placeholder name")
+
+    @model_validator(mode="after")
+    def validate_variables(self):
+        if self.source == "list" and not self.values:
+            raise ValueError("'variables.values' must be provided when source is 'list'")
+        if self.source == "file" and not self.path:
+            raise ValueError("'variables.path' must be provided when source is 'file'")
+        return self
+
+
 class Config(BaseModel):
     """Top-level YAML config."""
 
@@ -222,6 +265,7 @@ class Config(BaseModel):
     defaults: Defaults = Field(default_factory=Defaults)
     environment: Environment
     steps: list[dict] = Field(..., description="Ordered list of steps to execute")
+    variables: Variables | None = Field(default=None, description="Optional variable expansion")
 
     @field_validator("steps")
     @classmethod
