@@ -35,7 +35,6 @@ steps:
 # - button: OK_fileselector
 
 - window: '*Project Log' # Wait until the Project Log window appears, (when user have selected a file)
-  timeout: 10s
   action: minimize
 
 - window: '*Project Log'
@@ -51,10 +50,12 @@ steps:
 - button: select initial blend.png
   timeout: 2s # if wrong tab selected
 
+- wait: 2s
+
 - button: use existing edge displacement file.png
   command: click_if_exists # this will unselect it
   timeout: 2s # if this is wrongly selected
-  confidence: 1
+  confidence: 0.99
 
 - button: sloppy image.png
   timeout: 2s
